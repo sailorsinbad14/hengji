@@ -3,7 +3,7 @@ import { expandEntry } from '@app/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync, rmSync } from 'node:fs';
-import { SqliteRepository } from '../src/index';
+import { SqliteRepository } from '../src/sqlite';
 import { runRepositoryContract, fakeClock, counter, accounts } from './contract';
 
 runRepositoryContract('SqliteRepository(:memory:)', (now) => new SqliteRepository(':memory:', { now }));
