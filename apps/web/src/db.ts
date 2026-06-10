@@ -6,16 +6,34 @@ import { localISO } from './format';
 
 export const genId = (): string => crypto.randomUUID();
 
+/** 是否运行在 Tauri 桌面壳内 */
+export const isDesktop = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
 function daysAgo(n: number): string {
   const d = new Date();
   d.setDate(d.getDate() - n);
   return localISO(d);
 }
 
-/** 模块级单例：StrictMode 双调 effect 也只 seed 一次。内存仓库，刷新即重置（真持久化随 Tauri 壳接入）。 */
-export const ready: Promise<Repository> = bootstrap();
+/**
+ * 模块级单例：StrictMode 双调 effect 也只 bootstrap 一次。
+ * 桌面（Tauri）→ 本地 SQLite 持久化；浏览器 → 内存仓库 + 样本数据演示。
+ */
+export const ready: Promise<Repository> = isDesktop ? bootstrapDesktop() : bootstrapDemo();
 
-async function bootstrap(): Promise<Repository> {
+/** 桌面：本地 SQLite。首次启动只种默认科目表，不造样本数据——这是真账本。 */
+async function bootstrapDesktop(): Promise<Repository> {
+  const { TauriSqlRepository } = await import('@app/store/tauri');
+  const repo = await TauriSqlRepository.load('sqlite:heng.db');
+  const existing = await repo.listAccounts({ includeArchived: true });
+  if (existing.length === 0) {
+    for (const a of defaultChartOfAccounts(genId)) await repo.addAccount(a);
+  }
+  return repo;
+}
+
+/** 浏览器演示：内存仓库 + 样本数据（刷新即重置）。 */
+async function bootstrapDemo(): Promise<Repository> {
   const repo = new InMemoryRepository();
   const accounts = defaultChartOfAccounts(genId);
   for (const a of accounts) await repo.addAccount(a);

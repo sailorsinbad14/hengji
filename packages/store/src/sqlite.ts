@@ -11,120 +11,15 @@ import type {
   StoredTransaction,
   TxnQuery,
 } from './types';
+import { SCHEMA, toAccount, toBudget, toPosting, toTxn } from './schema';
+import type { AccountRow, BudgetRow, PostingRow, TxnRow } from './schema';
 
 const defaultClock: Clock = () => new Date().toISOString();
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS accounts (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  type TEXT NOT NULL,
-  parent_id TEXT,
-  currency TEXT NOT NULL,
-  archived INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  deleted INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS transactions (
-  id TEXT PRIMARY KEY,
-  date TEXT NOT NULL,
-  payee TEXT NOT NULL DEFAULT '',
-  note TEXT NOT NULL DEFAULT '',
-  tags TEXT NOT NULL DEFAULT '[]',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  deleted INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS postings (
-  id TEXT PRIMARY KEY,
-  txn_id TEXT NOT NULL,
-  account_id TEXT NOT NULL,
-  amount INTEGER NOT NULL,
-  currency TEXT NOT NULL,
-  FOREIGN KEY (txn_id) REFERENCES transactions(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_postings_txn ON postings(txn_id);
-CREATE INDEX IF NOT EXISTS idx_postings_account ON postings(account_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date);
-CREATE TABLE IF NOT EXISTS budgets (
-  id TEXT PRIMARY KEY,
-  account_id TEXT NOT NULL,
-  monthly_limit INTEGER NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  deleted INTEGER NOT NULL DEFAULT 0
-);
-`;
-
-interface AccountRow {
-  id: string;
-  name: string;
-  type: string;
-  parent_id: string | null;
-  currency: string;
-  archived: number;
-  created_at: string;
-  updated_at: string;
-  deleted: number;
-}
-interface TxnRow {
-  id: string;
-  date: string;
-  payee: string;
-  note: string;
-  tags: string;
-  created_at: string;
-  updated_at: string;
-  deleted: number;
-}
-interface PostingRow {
-  id: string;
-  txn_id: string;
-  account_id: string;
-  amount: number;
-  currency: string;
-}
-interface BudgetRow {
-  id: string;
-  account_id: string;
-  monthly_limit: number;
-  created_at: string;
-  updated_at: string;
-  deleted: number;
-}
-
-function toAccount(r: AccountRow): StoredAccount {
-  return {
-    id: r.id,
-    name: r.name,
-    type: r.type as Account['type'],
-    parentId: r.parent_id,
-    currency: r.currency,
-    archived: r.archived !== 0,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    deleted: r.deleted !== 0,
-  };
-}
-function toPosting(r: PostingRow): Posting {
-  return { id: r.id, txnId: r.txn_id, accountId: r.account_id, amount: r.amount, currency: r.currency };
-}
-function toBudget(r: BudgetRow): StoredBudget {
-  return {
-    id: r.id,
-    accountId: r.account_id,
-    monthlyLimit: r.monthly_limit,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    deleted: r.deleted !== 0,
-  };
-}
-
 /**
  * SQLite 实现（Node 端，基于内置 node:sqlite）。
- * 与 InMemoryRepository 遵循同一 Repository 契约；规范化为 accounts/transactions/postings 三表。
- * 同步驱动包成 async 接口，便于将来无缝换成 Tauri 的 tauri-plugin-sql（async、跨 JS↔Rust）。
+ * 与 InMemoryRepository 遵循同一 Repository 契约；schema 与行映射见 ./schema（与 Tauri 实现共用）。
+ * 同步驱动包成 async 接口，与桌面端 tauri-plugin-sql 实现形状一致。
  */
 export class SqliteRepository implements Repository {
   private readonly db: DatabaseSync;
@@ -227,9 +122,9 @@ export class SqliteRepository implements Repository {
       | TxnRow
       | undefined;
     if (!r) return null;
-    const postings = (this.db.prepare('SELECT * FROM postings WHERE txn_id = ?').all(id) as unknown as PostingRow[]).map(
-      toPosting,
-    );
+    const postings = (
+      this.db.prepare('SELECT * FROM postings WHERE txn_id = ?').all(id) as unknown as PostingRow[]
+    ).map(toPosting);
     return toTxn(r, postings);
   }
 
@@ -334,18 +229,4 @@ export class SqliteRepository implements Repository {
     const r = this.db.prepare('SELECT * FROM budgets WHERE id = ? AND deleted = 0').get(id) as BudgetRow | undefined;
     return r ? toBudget(r) : null;
   }
-}
-
-function toTxn(r: TxnRow, postings: Posting[]): StoredTransaction {
-  return {
-    id: r.id,
-    date: r.date,
-    payee: r.payee,
-    note: r.note,
-    tags: JSON.parse(r.tags) as string[],
-    postings,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    deleted: r.deleted !== 0,
-  };
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { accountBalance } from '@app/core';
 import type { Repository, StoredAccount, StoredBudget, StoredTransaction } from '@app/store';
-import { ready } from './db';
+import { isDesktop, ready } from './db';
 import { fmtMoney } from './format';
 import Dashboard from './views/Dashboard';
 import Transactions from './views/Transactions';
@@ -72,7 +72,11 @@ export default function App() {
             </div>
           );
         })}
-        <div className="s-note">演示版：数据存内存，刷新即重置。本地 SQLite 持久化随桌面壳接入。</div>
+        <div className="s-note">
+          {isDesktop
+            ? '桌面版：数据已持久化到本地 SQLite。'
+            : '网页演示版：数据存内存，刷新即重置；桌面版数据落本地 SQLite。'}
+        </div>
       </aside>
       <main className="main">
         {view === 'dashboard' && <Dashboard data={data} />}

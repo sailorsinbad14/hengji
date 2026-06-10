@@ -3,8 +3,10 @@ dist/
 *.tsbuildinfo
 .DS_Store
 
-# build artifacts (Tauri etc., later)
+# build artifacts (Tauri)
 apps/*/src-tauri/target/
+apps/*/src-tauri/gen/schemas/
+apps/desktop/scripts/app-icon.png
 
 # local data / secrets
 *.db
