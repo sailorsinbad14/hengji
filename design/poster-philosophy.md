@@ -1,0 +1,15 @@
+# 静衡 · Quiet Equilibrium
+
+**A design movement of patient balance.**
+
+静衡 believes that equilibrium is not stillness but the visible result of countless paired gestures — every mark answered by its mirror, every weight met by its counterweight. The canvas is a field of quiet symmetry: forms arrive in pairs, one solid and one hollow, accumulating row upon row like evidence gathered over years of disciplined observation. Nothing shouts. The composition holds its breath, and in that held breath the viewer senses an enormous, meticulous labor — the kind of patience that can only come from a master who has repeated one perfect gesture ten thousand times.
+
+Space is governed by the horizon of a beam held perfectly level. One long, thin line carries the entire composition the way a scale's arm carries its pans; everything above it is air and ideogram, everything below is sediment — dense, rhythmic strata of small marks that settle toward a final, double-ruled resolution. Negative space is not emptiness but counterweight: vast paper above, patient accumulation below, the two halves balancing each other with the precision of an instrument calibrated by hand.
+
+Color behaves like ink on archival paper. One deep botanical green is the voice of the work — the green of banker's lamps and ledger cloth — laid against warm, unbleached paper. Three quiet companions (a muted blue, an earthen amber, a dusk indigo) appear only as threads: rare, deliberate strands woven through the green field, converging slowly toward a single point of summation. The palette is closed, severe, and luminous in its restraint; every hue placed as carefully as a jeweler sets a stone.
+
+Rhythm is the movement's true medium. Hundreds of small strokes repeat with hairline regularity — yet no two regions feel mechanical, because density swells and dissolves like breath: full at the heart, fading at the edges, as if the record is still being written. Faint rules, tiny index numerals, and clinical reference marks frame the field the way a scientist annotates a specimen — the visual language of systematic study applied to something invisible and human. This tension — analytical grammar, contemplative subject — is the soul of 静衡.
+
+Typography whispers. Characters appear either as monumental single ideograms — calligraphic, sculptural, treated as form rather than word — or as thin, letterspaced labels no louder than a pencil note in a margin. Text never explains; it anchors. A phrase is permitted only when its removal would unbalance the page.
+
+Above all: the finished work must read as an artifact that took countless hours — every alignment checked thrice, every interval measured, every pair weighed by an expert at the absolute height of their craft. Hairlines meet exactly. Margins breathe evenly. The double rule at the bottom of a column — the bookkeeper's ancient sign that all is closed and balanced — is drawn with the reverence of a signature. When the page is finally still, the equilibrium should feel earned, not arranged.

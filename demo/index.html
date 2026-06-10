@@ -8,7 +8,7 @@
   :root{
     --bg:#f5f6f8; --surface:#fff; --ink:#0f1729; --ink-soft:#46546b; --muted:#8a94a6;
     --line:#e7eaf0; --brand:#0e9f6e; --brand-700:#047a55; --brand-50:#e7f7f0;
-    --pos:#0e9f6e; --neg:#e5484d; --biz:#d97706; --biz-50:#fdf2e2; --invest:#4f46e5;
+    --pos:#0e9f6e; --neg:#e5484d; --biz:#d97706; --biz-50:#fdf2e2; --invest:#4f46e5; --invest-50:#eceafe;
     --shadow-sm:0 1px 2px rgba(16,24,40,.05);
     --shadow:0 1px 3px rgba(16,24,40,.06),0 14px 34px -16px rgba(16,24,40,.22);
     --radius:16px;
@@ -20,6 +20,7 @@
     color:var(--ink);background:var(--bg);line-height:1.6;-webkit-font-smoothing:antialiased;
   }
   a{color:inherit;text-decoration:none}
+  button{font:inherit;cursor:pointer;border:none;background:none;color:inherit;text-align:left}
   .wrap{max-width:1140px;margin:0 auto;padding:0 24px}
   .btn{display:inline-flex;align-items:center;gap:8px;border:1px solid transparent;border-radius:10px;
     padding:11px 18px;font-size:15px;font-weight:600;cursor:pointer;transition:.18s;white-space:nowrap}
@@ -43,82 +44,117 @@
   .nav-cta{display:flex;gap:10px;align-items:center}
 
   /* HERO */
-  .hero{position:relative;overflow:hidden;padding:74px 0 40px}
+  .hero{position:relative;overflow:hidden;padding:64px 0 40px}
   .hero::before{content:"";position:absolute;inset:-30% -10% auto;height:560px;z-index:0;
     background:radial-gradient(60% 60% at 70% 20%,rgba(14,159,110,.16),transparent 60%),
                radial-gradient(50% 50% at 20% 0%,rgba(79,70,229,.10),transparent 60%)}
-  .hero-grid{position:relative;z-index:1;display:grid;grid-template-columns:minmax(0,0.95fr) minmax(0,1.15fr);
-    gap:48px;align-items:center}
-  .hero h1{font-size:46px;line-height:1.15;letter-spacing:-0.01em;font-weight:800;margin:14px 0 18px}
+  .hero-head{position:relative;z-index:1;max-width:760px;margin:0 auto;text-align:center}
+  .hero h1{font-size:44px;line-height:1.15;letter-spacing:-0.01em;font-weight:800;margin:14px 0 16px}
   .hero h1 .hl{background:linear-gradient(120deg,var(--brand),#13b87f);-webkit-background-clip:text;background-clip:text;color:transparent}
-  .hero p.lead{font-size:18px;color:var(--ink-soft);max-width:560px}
-  .hero-cta{display:flex;gap:12px;margin:26px 0 16px;flex-wrap:wrap}
-  .trust{display:flex;gap:18px;color:var(--muted);font-size:13.5px;flex-wrap:wrap}
+  .hero p.lead{font-size:18px;color:var(--ink-soft);margin:0 auto;max-width:640px}
+  .hero-cta{display:flex;gap:12px;margin:24px 0 14px;flex-wrap:wrap;justify-content:center}
+  .trust{display:flex;gap:18px;color:var(--muted);font-size:13.5px;flex-wrap:wrap;justify-content:center}
   .trust span{display:inline-flex;align-items:center;gap:6px}
   .dot{width:6px;height:6px;border-radius:50%;background:var(--brand)}
+  .hint{position:relative;z-index:1;text-align:center;margin:26px 0 10px;font-size:13.5px;color:var(--brand-700);font-weight:600}
 
   /* APP MOCKUP */
-  .appwin{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
-    box-shadow:var(--shadow);overflow:hidden}
+  .appwin{position:relative;z-index:1;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);overflow:hidden;margin-top:6px}
   .appwin-bar{display:flex;align-items:center;gap:7px;padding:12px 16px;border-bottom:1px solid var(--line);background:#fbfcfd}
   .tdot{width:11px;height:11px;border-radius:50%}
   .tdot.r{background:#ff5f57}.tdot.y{background:#febc2e}.tdot.g{background:#28c840}
   .appwin-bar .where{margin-left:10px;font-size:12.5px;color:var(--muted)}
-  .app{display:grid;grid-template-columns:200px 1fr;min-height:520px}
-  .side{border-right:1px solid var(--line);padding:16px 12px;background:#fbfcfd;display:flex;flex-direction:column;gap:4px}
-  .side .s-brand{display:flex;align-items:center;gap:8px;font-weight:800;font-size:15px;padding:6px 8px 12px}
-  .navi{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;font-size:14px;color:var(--ink-soft);font-weight:500}
-  .navi.active{background:var(--brand-50);color:var(--brand-700);font-weight:700}
-  .navi:hover:not(.active){background:#eef1f5}
-  .s-label{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.05em;padding:14px 10px 6px}
-  .acct{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-radius:8px;font-size:13px}
-  .acct:hover{background:#eef1f5}
-  .acct .nm{display:flex;align-items:center;gap:8px;color:var(--ink-soft)}
+  .app{display:grid;grid-template-columns:220px 1fr;min-height:560px}
+  .side{border-right:1px solid var(--line);padding:14px 10px;background:#fbfcfd;display:flex;flex-direction:column;gap:3px}
+  .side .s-brand{display:flex;align-items:center;gap:8px;font-weight:800;font-size:15px;padding:4px 8px 10px}
+  .s-label{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.05em;padding:10px 10px 5px}
+  .book{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border-radius:9px;font-size:13.5px;color:var(--ink-soft);font-weight:500}
+  .book:hover:not(.on){background:#eef1f5}
+  .book.on{background:var(--brand-50);color:var(--brand-700);font-weight:700}
+  .book .bk-type{margin-left:auto;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:999px}
+  .t-p{background:#e7f0fe;color:#1d6ae5}
+  .t-b{background:var(--biz-50);color:var(--biz)}
+  .t-i{background:var(--invest-50);color:var(--invest)}
+  .book.add{color:var(--muted);font-size:12.5px}
+  .book.add:hover{color:var(--brand-700)}
+  .acct{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-radius:8px;font-size:12.5px}
+  .acct .nm{color:var(--ink-soft)}
   .acct .bal{font-variant-numeric:tabular-nums;font-weight:600}
   .neg{color:var(--neg)} .pos{color:var(--pos)}
-  .main{padding:20px 22px;overflow:hidden}
-  .main-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
-  .main-head h2{font-size:18px;font-weight:800}
-  .seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;font-size:12.5px}
-  .seg span{padding:6px 11px;color:var(--ink-soft)} .seg span.on{background:var(--ink);color:#fff}
+  .main{padding:18px 20px;overflow:hidden}
+  .main-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  .main-head h2{font-size:17px;font-weight:800}
+  .main-head .mini{font-weight:600;color:var(--muted);font-size:12px}
 
-  .stats{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:12px;margin-bottom:16px}
-  .stat{border:1px solid var(--line);border-radius:12px;padding:13px 15px;background:#fff}
+  .stats{display:grid;grid-template-columns:1.35fr 1fr 1fr 1fr;gap:11px;margin-bottom:14px}
+  .stat{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#fff}
   .stat.hero-stat{background:linear-gradient(135deg,#0e9f6e,#047a55);border:none;color:#fff}
-  .stat .k{font-size:12px;color:var(--muted);font-weight:600}
+  .stat .k{font-size:11.5px;color:var(--muted);font-weight:600}
   .stat.hero-stat .k{color:rgba(255,255,255,.85)}
-  .stat .v{font-size:23px;font-weight:800;font-variant-numeric:tabular-nums;margin-top:3px}
-  .stat .v.sm{font-size:19px}
-  .stat .sub{font-size:11.5px;margin-top:2px}
-  .biz-v{color:var(--biz)}
+  .stat .v{font-size:21px;font-weight:800;font-variant-numeric:tabular-nums;margin-top:2px}
+  .stat .v.sm{font-size:17.5px}
+  .stat .sub{font-size:11px;margin-top:1px}
+  .biz-v{color:var(--biz)} .inv-v{color:var(--invest)}
 
-  .mid{display:grid;grid-template-columns:1.15fr 1fr;gap:14px;margin-bottom:16px}
-  .card{border:1px solid var(--line);border-radius:12px;padding:15px 16px;background:#fff}
-  .card h3{font-size:13.5px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}
+  .card{border:1px solid var(--line);border-radius:12px;padding:14px 15px;background:#fff;margin-bottom:12px}
+  .card h3{font-size:13px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between}
   .card h3 .mini{font-weight:600;color:var(--muted);font-size:11.5px}
-  .donut-row{display:flex;align-items:center;gap:18px}
-  .legend{display:flex;flex-direction:column;gap:9px;font-size:12.5px}
-  .legend i{width:9px;height:9px;border-radius:3px;display:inline-block;margin-right:8px}
-  .legend .lv{font-variant-numeric:tabular-nums;color:var(--muted);margin-left:6px}
+  .mid{display:grid;grid-template-columns:1.1fr 1fr;gap:12px}
+  .view-cap{font-size:11.5px;color:var(--muted);margin-top:10px;display:flex;align-items:center;gap:7px}
 
-  /* quick entry */
-  .qtabs{display:flex;gap:6px;margin-bottom:12px}
-  .qtab{flex:1;text-align:center;padding:7px;border-radius:8px;font-size:13px;font-weight:600;border:1px solid var(--line);color:var(--ink-soft)}
-  .qtab.on{background:var(--neg);color:#fff;border-color:transparent}
-  .qamt{font-size:30px;font-weight:800;font-variant-numeric:tabular-nums;margin:4px 0 12px;color:var(--neg)}
-  .qrow{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:11px}
-  .qchip{font-size:12.5px;padding:5px 11px;border-radius:999px;border:1px solid var(--line);color:var(--ink-soft)}
-  .qchip.on{background:var(--brand-50);color:var(--brand-700);border-color:#bfe6d4;font-weight:600}
-  .qfield{display:flex;align-items:center;justify-content:space-between;font-size:13px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;color:var(--ink-soft);margin-bottom:9px}
+  /* 财务总表 book cards */
+  .bookcards{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+  .bookcard{border:1px solid var(--line);border-radius:12px;padding:13px 15px;background:#fff;transition:.15s;cursor:pointer}
+  .bookcard:hover{box-shadow:var(--shadow-sm);border-color:#cdd3dd;transform:translateY(-1px)}
+  .bookcard .bc-head{display:flex;align-items:center;gap:8px;font-weight:700;font-size:13.5px;margin-bottom:6px}
+  .bookcard .bc-nw{font-size:19px;font-weight:800;font-variant-numeric:tabular-nums}
+  .bookcard .bc-sub{font-size:11.5px;color:var(--muted);margin-top:2px}
 
-  .txns .tx{display:flex;align-items:center;gap:12px;padding:10px 4px;border-top:1px solid var(--line)}
-  .txns .tx:first-child{border-top:none}
-  .avatar{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:17px;background:#f1f3f7;flex:none}
+  /* 交易行 */
+  .txns .tx{display:flex;align-items:center;gap:11px;padding:9px 2px;border-top:1px solid var(--line)}
+  .txns .tx:first-of-type{border-top:none}
+  .avatar{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;font-size:16px;background:#f1f3f7;flex:none}
   .tx .meta{flex:1;min-width:0}
-  .tx .t1{font-size:14px;font-weight:600;display:flex;align-items:center;gap:7px}
-  .tx .t2{font-size:12px;color:var(--muted)}
-  .tx .amt{font-weight:700;font-variant-numeric:tabular-nums;font-size:14.5px}
-  .engine-note{font-size:11.5px;color:var(--muted);margin-top:12px;display:flex;align-items:center;gap:7px}
+  .tx .t1{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:7px}
+  .tx .t2{font-size:11.5px;color:var(--muted)}
+  .tx .amt{font-weight:700;font-variant-numeric:tabular-nums;font-size:13.5px}
+  .amt.neutral{color:var(--ink-soft)}
+
+  /* 记一笔（简） */
+  .qtabs{display:flex;gap:6px;margin-bottom:10px}
+  .qtab{flex:1;text-align:center;padding:6px;border-radius:8px;font-size:12.5px;font-weight:600;border:1px solid var(--line);color:var(--ink-soft)}
+  .qtab.on{background:var(--neg);color:#fff;border-color:transparent}
+  .qamt{font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;margin:2px 0 10px;color:var(--neg)}
+  .qrow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+  .qchip{font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);color:var(--ink-soft)}
+  .qchip.on{background:var(--brand-50);color:var(--brand-700);border-color:#bfe6d4;font-weight:600}
+  .qfield{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;color:var(--ink-soft);margin-bottom:8px}
+
+  /* 生意账本 */
+  .inner-nav{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:13px}
+  .inner-nav span{font-size:12px;font-weight:600;padding:5px 11px;border-radius:999px;border:1px solid var(--line);color:var(--ink-soft)}
+  .inner-nav span.on{background:var(--ink);color:#fff;border-color:transparent}
+  table.otable{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.otable th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;padding:4px 6px;border-bottom:1px solid var(--line)}
+  table.otable td{padding:8px 6px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;vertical-align:middle}
+  table.otable tr:last-child td{border-bottom:none}
+  .st{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+  .st-buy{background:var(--biz-50);color:var(--biz)}
+  .st-wait{background:#e7f0fe;color:#1d6ae5}
+  .st-ship{background:var(--invest-50);color:var(--invest)}
+  .st-done{background:var(--brand-50);color:var(--brand-700)}
+  .due{display:flex;align-items:center;gap:9px;padding:8px 2px;border-top:1px solid var(--line);font-size:12.5px}
+  .due:first-of-type{border-top:none}
+  .due .d-name{font-weight:600}
+  .due .d-amt{margin-left:auto;font-weight:700;font-variant-numeric:tabular-nums}
+  .due-tag{font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:999px}
+  .due-hot{background:#fdecec;color:var(--neg)}
+  .due-cold{background:#f1f3f7;color:var(--muted)}
+  .pm{font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:999px;background:#e7f7f0;color:var(--brand-700)}
+  .mode{font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:999px}
+  .mode-stock{background:var(--brand-50);color:var(--brand-700)}
+  .mode-dropship{background:var(--biz-50);color:var(--biz)}
 
   /* SECTIONS */
   section.block{padding:74px 0}
@@ -174,12 +210,12 @@
   .fbar{border-top:1px solid #243049;padding-top:20px;display:flex;justify-content:space-between;font-size:13px;color:#7c899e;flex-wrap:wrap;gap:10px}
 
   @media(max-width:920px){
-    .hero-grid,.mid,.dive,.prices{grid-template-columns:1fr}
+    .mid,.dive,.prices,.bookcards{grid-template-columns:1fr}
     .arrow{transform:rotate(90deg);justify-self:center}
     .grid3{grid-template-columns:1fr}
     .stats{grid-template-columns:1fr 1fr}
     footer .fgrid{grid-template-columns:1fr 1fr}
-    .hero h1{font-size:34px}
+    .hero h1{font-size:32px}
     .app{grid-template-columns:1fr}.side{display:none}
   }
 </style>
@@ -191,7 +227,7 @@
     <div class="brand"><span class="mark">衡</span>衡记 <span style="font-weight:500;color:var(--muted);font-size:13px;margin-left:2px">Héng</span></div>
     <nav class="nav-links">
       <a href="#dive">核心理念</a>
-      <a href="#scenes">三大场景</a>
+      <a href="#scenes">多账本</a>
       <a href="#features">功能</a>
       <a href="#pricing">价格</a>
       <a href="#opensource">开源</a>
@@ -205,11 +241,11 @@
 
 <!-- HERO -->
 <section class="hero">
-  <div class="wrap hero-grid">
-    <div>
-      <span class="eyebrow">开源 · 本地优先</span>
-      <h1>把开支、生意、投资<br/>记进<span class="hl">同一本</span>清楚的账</h1>
-      <p class="lead">底层是严谨的复式记账引擎，表面只是「记一笔」。个人日常、小生意流水利润、投资账户——一处搞定。数据在你自己手里。</p>
+  <div class="wrap">
+    <div class="hero-head">
+      <span class="eyebrow">开源 · 本地优先 · 多账本</span>
+      <h1>开支、生意、投资<br/><span class="hl">各开各的账本</span>，总表一眼看清</h1>
+      <p class="lead">个人日常、小生意进销存、投资盈亏——各自独立账本随时切换，财务总表自动汇总。底层是严谨的复式记账引擎，表面只是「记一笔」。数据在你自己手里。</p>
       <div class="hero-cta">
         <a class="btn btn-primary" href="#pricing">⬇ 免费下载本地版</a>
         <a class="btn btn-ghost" href="#pricing">了解云同步</a>
@@ -218,92 +254,192 @@
         <span><i class="dot"></i> 100% 本地优先</span>
         <span><i class="dot"></i> 开源免费</span>
         <span><i class="dot"></i> 复式记账内核</span>
-        <span><i class="dot"></i> 桌面 + 手机</span>
+        <span><i class="dot"></i> 多账本自由切换</span>
       </div>
     </div>
+
+    <div class="hint">👆 下面是可交互设计稿：点左侧「账本」即可切换试试</div>
 
     <!-- APP MOCKUP -->
     <div class="appwin">
       <div class="appwin-bar">
         <span class="tdot r"></span><span class="tdot y"></span><span class="tdot g"></span>
-        <span class="where">衡记 — 总览</span>
+        <span class="where">衡记 — 财务总表</span>
       </div>
       <div class="app">
         <aside class="side">
           <div class="s-brand"><span class="mark" style="width:24px;height:24px;font-size:13px;border-radius:7px">衡</span> 衡记</div>
-          <div class="navi active">📊 总览</div>
-          <div class="navi">✏️ 记一笔</div>
-          <div class="navi">📒 流水</div>
-          <div class="navi">📈 报表</div>
-          <div class="navi">🎯 预算</div>
-          <div class="s-label">账户</div>
-          <div class="acct"><span class="nm">🏦 招行卡</span><span class="bal">¥2,970</span></div>
-          <div class="acct"><span class="nm">💙 支付宝</span><span class="bal">¥3,000</span></div>
-          <div class="acct"><span class="nm">📈 投资账户</span><span class="bal">¥1,000</span></div>
-          <div class="acct"><span class="nm">💳 信用卡</span><span class="bal neg">−¥800</span></div>
+
+          <div class="s-label">账本</div>
+          <button class="book on" data-book="all">🧮 财务总表</button>
+          <button class="book" data-book="me">👤 我的日常 <span class="bk-type t-p">个人</span></button>
+          <button class="book" data-book="wife">👩 妻子的账本 <span class="bk-type t-p">个人</span></button>
+          <button class="book" data-book="biz">💼 外贸小生意 <span class="bk-type t-b">生意</span></button>
+          <button class="book" data-book="inv">📈 投资组合 <span class="bk-type t-i">投资</span></button>
+          <button class="book add">＋ 新建账本</button>
+
+          <div class="s-label acct-label" style="display:none">本账本账户</div>
+          <div class="acct-group" data-for="me" style="display:none">
+            <div class="acct"><span class="nm">🏦 招商银行</span><span class="bal">¥26,912.00</span></div>
+            <div class="acct"><span class="nm">💙 支付宝</span><span class="bal">¥2,972.00</span></div>
+            <div class="acct"><span class="nm">💬 微信钱包</span><span class="bal">¥217.70</span></div>
+            <div class="acct"><span class="nm">💳 信用卡</span><span class="bal neg">−¥326.00</span></div>
+          </div>
+          <div class="acct-group" data-for="wife" style="display:none">
+            <div class="acct"><span class="nm">🏦 工商银行</span><span class="bal">¥11,300.00</span></div>
+            <div class="acct"><span class="nm">💙 支付宝</span><span class="bal">¥1,150.00</span></div>
+          </div>
+          <div class="acct-group" data-for="biz" style="display:none">
+            <div class="acct"><span class="nm">🏦 对公账户</span><span class="bal">¥35,800.00</span></div>
+            <div class="acct"><span class="nm">💬 微信商户</span><span class="bal">¥12,500.00</span></div>
+            <div class="acct"><span class="nm">📦 库存资产</span><span class="bal">¥4,588.00</span></div>
+            <div class="acct"><span class="nm">🧾 应收账款</span><span class="bal">¥2,400.00</span></div>
+            <div class="acct"><span class="nm">📑 应付账款</span><span class="bal neg">−¥31,500.00</span></div>
+          </div>
+          <div class="acct-group" data-for="inv" style="display:none">
+            <div class="acct"><span class="nm">📈 券商账户</span><span class="bal">¥10,100.00</span></div>
+            <div class="acct"><span class="nm">🪙 基金定投</span><span class="bal">¥5,130.00</span></div>
+          </div>
         </aside>
 
         <main class="main">
-          <div class="main-head">
-            <h2>总览</h2>
-            <div class="seg"><span>本周</span><span class="on">本月</span><span>本年</span></div>
-          </div>
 
-          <div class="stats">
-            <div class="stat hero-stat">
-              <div class="k">净资产</div>
-              <div class="v">¥61,700</div>
-              <div class="sub">▲ 本月 +¥6,170</div>
+          <!-- ===== 财务总表 ===== -->
+          <section class="bview" id="view-all">
+            <div class="main-head"><h2>财务总表 · 全部账本</h2><span class="mini">2026-06</span></div>
+            <div class="stats">
+              <div class="stat hero-stat">
+                <div class="k">全部净资产（4 个账本汇总）</div>
+                <div class="v">¥79,364.20</div>
+                <div class="sub">▲ 本月 +¥11,840</div>
+              </div>
+              <div class="stat"><div class="k">本月总收入</div><div class="v sm pos">¥35,730</div></div>
+              <div class="stat"><div class="k">本月总支出</div><div class="v sm neg">¥7,180</div></div>
+              <div class="stat"><div class="k">生意毛利 / 投资盈亏</div><div class="v sm"><span class="biz-v">¥6,420</span> <span style="font-size:12px;color:var(--muted)">/</span> <span class="inv-v">+¥1,230</span></div></div>
             </div>
-            <div class="stat"><div class="k">本月收入</div><div class="v sm pos">¥7,000</div></div>
-            <div class="stat"><div class="k">本月支出</div><div class="v sm neg">¥830</div></div>
-            <div class="stat"><div class="k">小生意利润 <span class="chip">生意</span></div><div class="v sm biz-v">¥1,200</div></div>
-          </div>
+            <div class="bookcards">
+              <div class="bookcard" data-go="me"><div class="bc-head">👤 我的日常 <span class="bk-type t-p">个人</span></div><div class="bc-nw">¥30,252.20</div><div class="bc-sub">本月结余 +¥9,882 · 4 账户 · 23 笔</div></div>
+              <div class="bookcard" data-go="wife"><div class="bc-head">👩 妻子的账本 <span class="bk-type t-p">个人</span></div><div class="bc-nw">¥12,450.00</div><div class="bc-sub">本月结余 +¥4,660 · 2 账户 · 11 笔</div></div>
+              <div class="bookcard" data-go="biz"><div class="bc-head">💼 外贸小生意 <span class="bk-type t-b">生意</span></div><div class="bc-nw">¥21,432.00</div><div class="bc-sub">本月营收 ¥21,500 · 毛利 ¥6,420 · 应付待结 ¥31,500</div></div>
+              <div class="bookcard" data-go="inv"><div class="bc-head">📈 投资组合 <span class="bk-type t-i">投资</span></div><div class="bc-nw">¥15,230.00</div><div class="bc-sub">累计盈亏 <b class="pos">+¥1,230（+8.8%）</b> · 2 账户</div></div>
+            </div>
+            <div class="view-cap">⚙️ 汇总 = 各账本净资产之和（引擎按复式分录聚合）；点上方卡片或左侧列表切换账本。</div>
+          </section>
 
-          <div class="mid">
-            <div class="card">
-              <h3>资产分布 <span class="mini">总 ¥6,970（流动）</span></h3>
-              <div class="donut-row">
-                <svg width="120" height="120" viewBox="0 0 36 36">
-                  <g transform="rotate(-90 18 18)">
-                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="#eef1f5" stroke-width="4.2"/>
-                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="#0e9f6e" stroke-width="4.2" stroke-dasharray="43 57" stroke-dashoffset="0"/>
-                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="#4f46e5" stroke-width="4.2" stroke-dasharray="42.6 57.4" stroke-dashoffset="-43"/>
-                    <circle cx="18" cy="18" r="15.915" fill="none" stroke="#d97706" stroke-width="4.2" stroke-dasharray="14.4 85.6" stroke-dashoffset="-85.6"/>
-                  </g>
-                  <text x="18" y="17.5" text-anchor="middle" font-size="4.6" font-weight="700" fill="#0f1729">¥6,970</text>
-                  <text x="18" y="22" text-anchor="middle" font-size="2.6" fill="#8a94a6">流动资产</text>
-                </svg>
-                <div class="legend">
-                  <div><i style="background:#0e9f6e"></i>支付宝<span class="lv">¥3,000</span></div>
-                  <div><i style="background:#4f46e5"></i>招行卡<span class="lv">¥2,970</span></div>
-                  <div><i style="background:#d97706"></i>投资账户<span class="lv">¥1,000</span></div>
+          <!-- ===== 我的日常（个人） ===== -->
+          <section class="bview" id="view-me" style="display:none">
+            <div class="main-head"><h2>我的日常 · 总览</h2><span class="mini">个人账本 · 无生意元素</span></div>
+            <div class="stats">
+              <div class="stat hero-stat"><div class="k">净资产</div><div class="v">¥30,252.20</div><div class="sub">▲ 本月 +¥9,882</div></div>
+              <div class="stat"><div class="k">本月收入</div><div class="v sm pos">¥12,230</div></div>
+              <div class="stat"><div class="k">本月支出</div><div class="v sm neg">¥2,348</div></div>
+              <div class="stat"><div class="k">本月结余</div><div class="v sm">¥9,882</div></div>
+            </div>
+            <div class="mid">
+              <div class="card txns">
+                <h3>最近交易</h3>
+                <div class="tx"><div class="avatar">🍜</div><div class="meta"><div class="t1">晚餐</div><div class="t2">餐饮 · 微信钱包 · 06-09</div></div><div class="amt neg">−¥45.80</div></div>
+                <div class="tx"><div class="avatar">🎮</div><div class="meta"><div class="t1">电影</div><div class="t2">娱乐 · 招商银行 · 06-08</div></div><div class="amt neg">−¥88.00</div></div>
+                <div class="tx"><div class="avatar">🚕</div><div class="meta"><div class="t1">打车</div><div class="t2">交通 · 支付宝 · 06-06</div></div><div class="amt neg">−¥28.00</div></div>
+                <div class="tx"><div class="avatar">🛒</div><div class="meta"><div class="t1">超市采购</div><div class="t2">购物 · 信用卡 · 06-05</div></div><div class="amt neg">−¥326.00</div></div>
+                <div class="tx"><div class="avatar">💰</div><div class="meta"><div class="t1">工资</div><div class="t2">工资 · 招商银行 · 06-01</div></div><div class="amt pos">+¥12,000.00</div></div>
+              </div>
+              <div class="card">
+                <h3>记一笔</h3>
+                <div class="qtabs"><div class="qtab on">支出</div><div class="qtab">收入</div><div class="qtab">转账</div></div>
+                <div class="qamt">−¥30.00</div>
+                <div class="qrow">
+                  <span class="qchip on">🍜 餐饮</span><span class="qchip">🚕 交通</span><span class="qchip">🛒 购物</span><span class="qchip">＋</span>
                 </div>
+                <div class="qfield"><span>账户</span><span style="color:var(--ink);font-weight:600">🏦 招商银行 ▾</span></div>
+                <a class="btn btn-primary" style="width:100%;justify-content:center" href="#">保存</a>
+                <div class="view-cap">个人账本界面纯净：没有客户/订单/生意标签。</div>
               </div>
             </div>
+          </section>
 
+          <!-- ===== 妻子的账本（个人 #2） ===== -->
+          <section class="bview" id="view-wife" style="display:none">
+            <div class="main-head"><h2>妻子的账本 · 总览</h2><span class="mini">同类型账本可开多个</span></div>
+            <div class="stats">
+              <div class="stat hero-stat"><div class="k">净资产</div><div class="v">¥12,450.00</div><div class="sub">▲ 本月 +¥4,660</div></div>
+              <div class="stat"><div class="k">本月收入</div><div class="v sm pos">¥6,800</div></div>
+              <div class="stat"><div class="k">本月支出</div><div class="v sm neg">¥2,140</div></div>
+              <div class="stat"><div class="k">本月结余</div><div class="v sm">¥4,660</div></div>
+            </div>
+            <div class="card txns">
+              <h3>最近交易</h3>
+              <div class="tx"><div class="avatar">💄</div><div class="meta"><div class="t1">护肤品</div><div class="t2">购物 · 支付宝 · 06-08</div></div><div class="amt neg">−¥420.00</div></div>
+              <div class="tx"><div class="avatar">🧘</div><div class="meta"><div class="t1">瑜伽课包</div><div class="t2">娱乐 · 工商银行 · 06-04</div></div><div class="amt neg">−¥980.00</div></div>
+              <div class="tx"><div class="avatar">💰</div><div class="meta"><div class="t1">工资</div><div class="t2">工资 · 工商银行 · 06-01</div></div><div class="amt pos">+¥6,800.00</div></div>
+            </div>
+            <div class="view-cap">每个账本独立记账、独立报表；总表里自动并入家庭汇总。</div>
+          </section>
+
+          <!-- ===== 外贸小生意（生意） ===== -->
+          <section class="bview" id="view-biz" style="display:none">
+            <div class="main-head"><h2>外贸小生意 · 总览</h2><span class="mini">生意账本 · 进销存 + 客户管理</span></div>
+            <div class="inner-nav">
+              <span class="on">总览</span><span>订单</span><span>客户</span><span>产品</span><span>采购</span><span>库存</span><span>收付款</span>
+            </div>
+            <div class="stats">
+              <div class="stat hero-stat"><div class="k">本月营收</div><div class="v">¥21,500</div><div class="sub">毛利 ¥6,420（29.9%）</div></div>
+              <div class="stat"><div class="k">应收待收</div><div class="v sm biz-v">¥2,400</div></div>
+              <div class="stat"><div class="k">应付待结</div><div class="v sm neg">¥31,500</div></div>
+              <div class="stat"><div class="k">库存现值</div><div class="v sm">¥4,588</div></div>
+            </div>
             <div class="card">
-              <h3>记一笔</h3>
-              <div class="qtabs"><div class="qtab on">支出</div><div class="qtab">收入</div><div class="qtab">转账</div></div>
-              <div class="qamt">−¥30.00</div>
-              <div class="qrow">
-                <span class="qchip on">🍜 餐饮</span><span class="qchip">🚕 交通</span><span class="qchip">🛒 购物</span><span class="qchip">＋</span>
-              </div>
-              <div class="qfield"><span>账户</span><span style="color:var(--ink);font-weight:600">🏦 招行卡 ▾</span></div>
-              <div class="qfield"><span>标签</span><span style="color:var(--ink);font-weight:600">个人</span></div>
-              <a class="btn btn-primary" style="width:100%;justify-content:center" href="#">保存</a>
+              <h3>最近订单 <span class="mini">状态：待采购→待发货→已发货→已完成</span></h3>
+              <table class="otable">
+                <tr><th>订单</th><th>客户</th><th>金额</th><th>状态</th><th style="text-align:right">毛利</th></tr>
+                <tr><td><b>#1024</b> 保温壶×100</td><td>张老板</td><td>¥5,200</td><td><span class="st st-done">已完成</span></td><td style="text-align:right" class="pos">+¥1,560</td></tr>
+                <tr><td><b>#1023</b> 定制礼盒×50 <span class="mode mode-dropship">代采</span></td><td>李姐</td><td>¥6,500</td><td><span class="st st-buy">待采购</span></td><td style="text-align:right;color:var(--muted)">预估 +¥1,800</td></tr>
+                <tr><td><b>#1022</b> 不锈钢杯×200</td><td>王总</td><td>¥3,800</td><td><span class="st st-ship">已发货</span></td><td style="text-align:right" class="pos">+¥1,150</td></tr>
+                <tr><td><b>#1021</b> 帆布袋×500</td><td>陈生</td><td>¥6,000</td><td><span class="st st-wait">待发货</span></td><td style="text-align:right" class="pos">+¥1,910</td></tr>
+              </table>
             </div>
-          </div>
+            <div class="mid">
+              <div class="card">
+                <h3>应付到期提醒 <span class="mini">账期最长 12 个月</span></h3>
+                <div class="due"><span class="d-name">鑫达五金</span><span class="due-tag due-hot">3 天后到期</span><span class="d-amt">¥8,000</span></div>
+                <div class="due"><span class="d-name">广州礼品厂</span><span class="due-tag due-cold">2027-06 到期 · 账期 12 个月</span><span class="d-amt">¥23,500</span></div>
+                <div class="due"><span class="d-name" style="color:var(--muted)">已付 06-02</span><span class="pm">微信</span><span style="font-size:11px">📎 凭证截图</span><span class="d-amt" style="color:var(--muted)">¥5,000</span></div>
+              </div>
+              <div class="card">
+                <h3>库存速览 <span class="mini">移动加权平均</span></h3>
+                <div class="due"><span class="d-name">保温壶</span><span class="mode mode-stock">库存</span><span class="d-amt">120 件 · 均价 ¥18.60</span></div>
+                <div class="due"><span class="d-name">不锈钢杯</span><span class="mode mode-stock">库存</span><span class="d-amt">380 件 · 均价 ¥6.20</span></div>
+                <div class="due"><span class="d-name">定制礼盒</span><span class="mode mode-dropship">代采</span><span class="d-amt" style="color:var(--muted)">按单采购 · 不留库存</span></div>
+              </div>
+            </div>
+            <div class="view-cap">⚙️ 订单/采购/收付款自动生成复式分录：赊购=借库存/贷应付；付款=借应付/贷微信——总表因此永远是对的。</div>
+          </section>
 
-          <div class="card txns">
-            <h3>最近交易</h3>
-            <div class="tx"><div class="avatar">💰</div><div class="meta"><div class="t1">工资</div><div class="t2">招行卡 · 05-01</div></div><div class="amt pos">+¥5,000.00</div></div>
-            <div class="tx"><div class="avatar">🧾</div><div class="meta"><div class="t1">营业收入 <span class="chip">生意</span></div><div class="t2">支付宝 · 06-02</div></div><div class="amt pos">+¥2,000.00</div></div>
-            <div class="tx"><div class="avatar">📦</div><div class="meta"><div class="t1">进货成本 <span class="chip">生意</span></div><div class="t2">信用卡 · 06-03</div></div><div class="amt neg">−¥800.00</div></div>
-            <div class="tx"><div class="avatar">🔁</div><div class="meta"><div class="t1">转账 → 投资账户</div><div class="t2">招行卡 · 05-10</div></div><div class="amt" style="color:var(--ink-soft)">¥1,000.00</div></div>
-            <div class="tx"><div class="avatar">🍜</div><div class="meta"><div class="t1">餐饮</div><div class="t2">招行卡 · 05-03</div></div><div class="amt neg">−¥30.00</div></div>
-          </div>
-          <div class="engine-note">⚙️ 页面数据由 <b style="color:var(--ink-soft)">@app/core</b> 复式引擎实际算出（净资产 / 利润 / 余额均为引擎输出）</div>
+          <!-- ===== 投资组合（投资） ===== -->
+          <section class="bview" id="view-inv" style="display:none">
+            <div class="main-head"><h2>投资组合 · 总览</h2><span class="mini">投资账本</span></div>
+            <div class="stats">
+              <div class="stat hero-stat"><div class="k">总现值</div><div class="v">¥15,230</div><div class="sub">本金 ¥14,000</div></div>
+              <div class="stat"><div class="k">累计盈亏</div><div class="v sm pos">+¥1,230</div></div>
+              <div class="stat"><div class="k">收益率</div><div class="v sm pos">+8.8%</div></div>
+              <div class="stat"><div class="k">账户数</div><div class="v sm">2</div></div>
+            </div>
+            <div class="mid">
+              <div class="card txns">
+                <h3>持仓账户</h3>
+                <div class="tx"><div class="avatar">📈</div><div class="meta"><div class="t1">券商账户</div><div class="t2">现值更新于 06-09</div></div><div class="amt pos">¥10,100 <span style="font-size:11px">(+¥730)</span></div></div>
+                <div class="tx"><div class="avatar">🪙</div><div class="meta"><div class="t1">基金定投</div><div class="t2">现值更新于 06-08</div></div><div class="amt pos">¥5,130 <span style="font-size:11px">(+¥500)</span></div></div>
+              </div>
+              <div class="card">
+                <h3>更新现值</h3>
+                <div class="qfield"><span>账户</span><span style="color:var(--ink);font-weight:600">📈 券商账户 ▾</span></div>
+                <div class="qfield"><span>最新现值（元）</span><span style="color:var(--ink);font-weight:600">10,100</span></div>
+                <a class="btn btn-primary" style="width:100%;justify-content:center" href="#">更新现值</a>
+                <div class="view-cap">差额自动记入「投资盈亏」并计入净资产；完整持仓/估值模块见路线 v0.4。</div>
+              </div>
+            </div>
+          </section>
+
         </main>
       </div>
     </div>
@@ -324,7 +460,7 @@
         <div class="pb">
           <div class="single-entry">
             <div class="avatar">🍜</div>
-            <div><div style="font-weight:700">餐饮</div><div style="font-size:12.5px;color:var(--muted)">招行卡 · 个人</div></div>
+            <div><div style="font-weight:700">餐饮</div><div style="font-size:12.5px;color:var(--muted)">招商银行 · 我的日常</div></div>
             <div class="se-amt">−¥30</div>
           </div>
         </div>
@@ -336,39 +472,39 @@
           <table class="ledger">
             <tr><th>科目</th><th>借</th><th>贷</th></tr>
             <tr><td>餐饮（费用）</td><td>30.00</td><td>—</td></tr>
-            <tr><td>招行卡（资产）</td><td>—</td><td>30.00</td></tr>
+            <tr><td>招商银行（资产）</td><td>—</td><td>30.00</td></tr>
           </table>
           <div class="balanced">✓ 借贷平衡 · 永远等式成立</div>
         </div>
       </div>
     </div>
-    <p class="dive-cap">正因为底层是复式记账，投资盈亏、账户转账、小生意利润才能被<b>严谨地算对</b>——而你完全感觉不到借贷的存在。</p>
+    <p class="dive-cap">正因为底层是复式记账，订单毛利、应付账款、投资盈亏、跨账本汇总才能被<b>严谨地算对</b>——而你完全感觉不到借贷的存在。</p>
   </div>
 </section>
 
-<!-- 三大场景 -->
+<!-- 多账本三场景 -->
 <section class="block alt" id="scenes">
   <div class="wrap">
     <div class="sec-head">
-      <span class="eyebrow">一处搞定</span>
-      <h2>三类账，混着记也分得清</h2>
-      <p>个人和生意常共用一张卡——用标签区分，利润表一键过滤。</p>
+      <span class="eyebrow">多账本</span>
+      <h2>三类账本，各记各的，总表一眼清</h2>
+      <p>每类账本可建多个——夫妻各一本、多个生意、多个投资组合，随时切换。</p>
     </div>
     <div class="grid3">
       <div class="feat">
-        <div class="ico" style="background:var(--brand-50)">🧾</div>
-        <h3>个人日常开支</h3>
-        <p>收支流水、分类、账户、预算。快速「记一笔」，月度收支与净资产一目了然。</p>
+        <div class="ico" style="background:#e7f0fe">👤</div>
+        <h3>个人账本</h3>
+        <p>收支流水、分类、预算、月度报表。界面纯净，没有任何生意元素。给家人开新账本只要一秒。</p>
       </div>
       <div class="feat">
         <div class="ico" style="background:var(--biz-50)">💼</div>
-        <h3>小生意流水利润</h3>
-        <p>收款进同一张卡也不怕——打上「生意」标签，营收、成本、利润自动单独成表。</p>
+        <h3>生意账本 <span class="tag-soon">v0.2 开发中</span></h3>
+        <p>客户 / 产品 / 订单 / 采购 / 库存全套：留库存与代采自动分流，每单毛利、应收应付、长账期到期提醒、付款方式 + 截图凭证留底。</p>
       </div>
       <div class="feat">
-        <div class="ico" style="background:#eceafe">📈</div>
-        <h3>投资账户 <span class="tag-soon">v0.3 完整版</span></h3>
-        <p>先把投资账户纳入净资产总览；持仓、估值、已/未实现损益与多币种随后到位。</p>
+        <div class="ico" style="background:var(--invest-50)">📈</div>
+        <h3>投资账本</h3>
+        <p>多个组合独立核算，现值一键更新、浮盈浮亏自动入账并计入总净资产。完整持仓估值模块随后到位。</p>
       </div>
     </div>
   </div>
@@ -382,10 +518,10 @@
       <h2>记得快，看得清，守得住</h2>
     </div>
     <div class="grid3">
-      <div class="feat"><div class="ico" style="background:var(--brand-50)">🗣️</div><h3>AI / 语音记账 <span class="tag-soon">规划中</span></h3><p>「昨天打车30」一句话或一段语音，自动解析金额、分类、账户。可选本地小模型，离线也能用。</p></div>
+      <div class="feat"><div class="ico" style="background:var(--brand-50)">🧮</div><h3>财务总表</h3><p>全部账本一键汇总：总净资产、总收支、生意毛利、投资盈亏，也可任一账本单独细看。</p></div>
       <div class="feat"><div class="ico" style="background:var(--biz-50)">📥</div><h3>账单导入 <span class="tag-soon">规划中</span></h3><p>支付宝 / 微信 / 银行流水，截图或表格，自动归类，告别纯手工录入。</p></div>
       <div class="feat"><div class="ico" style="background:#eceafe">📊</div><h3>报表图表</h3><p>趋势、分类占比、月度对比、净资产曲线，看清钱去哪了、生意赚不赚。</p></div>
-      <div class="feat"><div class="ico" style="background:var(--brand-50)">🎯</div><h3>预算与提醒</h3><p>按分类设月度预算，超支提醒，月底自动结算回顾。</p></div>
+      <div class="feat"><div class="ico" style="background:var(--brand-50)">🗣️</div><h3>AI / 语音记账 <span class="tag-soon">规划中</span></h3><p>「昨天打车30」一句话或一段语音，自动解析金额、分类、账户。可选本地小模型，离线也能用。</p></div>
       <div class="feat"><div class="ico" style="background:var(--biz-50)">💻</div><h3>桌面 + 手机</h3><p>一套内核多端复用，桌面先行，手机随后。本地数据库，离线随手记。</p></div>
       <div class="feat"><div class="ico" style="background:#eceafe">🔒</div><h3>本地优先 · 可选云同步</h3><p>默认数据只在你设备上。需要多端实时同步时，再开通加密云同步。</p></div>
     </div>
@@ -405,10 +541,10 @@
         <div class="pname">本地版</div>
         <div class="amt">¥0 <small>/ 永久</small></div>
         <ul>
-          <li>全部记账、账户、标签</li>
+          <li>多账本（个人 / 生意 / 投资）</li>
+          <li>生意进销存 + 客户管理</li>
           <li>报表、预算、投资总览</li>
           <li>数据 100% 在本机</li>
-          <li>桌面 + 手机本地使用</li>
           <li>开源、可自托管</li>
         </ul>
         <a class="btn btn-ghost" style="width:100%;justify-content:center" href="#">⬇ 免费下载</a>
@@ -449,18 +585,44 @@
     <div class="fgrid">
       <div>
         <div class="brand" style="display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px"><span class="mark">衡</span>衡记 Héng</div>
-        <p style="font-size:14px;max-width:280px">深入浅出的复式记账。个人开支 · 小生意 · 投资，一处记清。</p>
+        <p style="font-size:14px;max-width:280px">深入浅出的复式记账。个人 · 生意 · 投资，多账本各记各的，总表一眼清。</p>
       </div>
       <div><h4>产品</h4><a href="#features">功能</a><a href="#pricing">价格</a><a href="#">下载</a><a href="#">更新日志</a></div>
       <div><h4>资源</h4><a href="#">文档</a><a href="#">GitHub</a><a href="#">自托管指南</a><a href="#">API</a></div>
       <div><h4>关于</h4><a href="#">隐私</a><a href="#">开源许可证</a><a href="#">联系</a></div>
     </div>
     <div class="fbar">
-      <span>© 2026 衡记 · 演示样稿（产品名与定价均为占位）</span>
+      <span>© 2026 衡记 · 演示样稿（产品名、数字与定价均为设计示意）</span>
       <span>开源 · 本地优先 · 复式记账内核</span>
     </div>
   </div>
 </footer>
+
+<script>
+  (function () {
+    var NAMES = { all: '财务总表', me: '我的日常', wife: '妻子的账本', biz: '外贸小生意', inv: '投资组合' };
+    var books = document.querySelectorAll('.book[data-book]');
+    var views = document.querySelectorAll('.bview');
+    var groups = document.querySelectorAll('.acct-group');
+    var acctLabel = document.querySelector('.acct-label');
+    var where = document.querySelector('.where');
+
+    function show(id) {
+      books.forEach(function (b) { b.classList.toggle('on', b.dataset.book === id); });
+      views.forEach(function (v) { v.style.display = v.id === 'view-' + id ? '' : 'none'; });
+      groups.forEach(function (g) { g.style.display = g.dataset.for === id ? '' : 'none'; });
+      acctLabel.style.display = id === 'all' ? 'none' : '';
+      where.textContent = '衡记 — ' + NAMES[id];
+    }
+
+    books.forEach(function (b) {
+      b.addEventListener('click', function () { show(b.dataset.book); });
+    });
+    document.querySelectorAll('.bookcard[data-go]').forEach(function (c) {
+      c.addEventListener('click', function () { show(c.dataset.go); });
+    });
+  })();
+</script>
 
 </body>
 </html>

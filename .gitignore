@@ -13,3 +13,7 @@ apps/desktop/scripts/app-icon.png
 *.sqlite
 .env
 .env.local
+
+# design renders are reproducible via design/*.mjs — pin only the publish-ready one
+design/*.png
+!design/poster-hengji-xhs-3x4.png
