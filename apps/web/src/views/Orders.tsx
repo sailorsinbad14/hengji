@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fromMinor, orderTotal, toMinor } from '@app/core';
-import type { OrderLine, OrderStatus, SettlementMethod } from '@app/core';
+import type { OrderLine, OrderStatus } from '@app/core';
 import type { StoredCustomer, StoredOrder, StoredProduct } from '@app/store';
 import type { AppData } from '../App';
 import { genId } from '../db';
 import { fmtMoney, todayISO } from '../format';
-import { completeOrder, receivableBalance, recordCollection, SETTLEMENT_METHODS } from '../biz';
+import { completeOrder, receivableBalance, recordCollection } from '../biz';
 
 const STATUS: Record<OrderStatus, { label: string; cls: string }> = {
   pending_purchase: { label: '待采购', cls: '' },
@@ -42,7 +42,6 @@ export default function Orders({ data }: { data: AppData }) {
   const [collectFor, setCollectFor] = useState<string | null>(null);
   const [cAmount, setCAmount] = useState('');
   const [cDate, setCDate] = useState(todayISO());
-  const [cMethod, setCMethod] = useState<SettlementMethod>('wechat');
   const [cAcct, setCAcct] = useState('');
 
   async function refresh(): Promise<void> {
@@ -150,7 +149,6 @@ export default function Orders({ data }: { data: AppData }) {
     setCollectFor(order.id);
     setCAmount(owed > 0 ? String(fromMinor(owed)) : '');
     setCDate(todayISO());
-    setCMethod('wechat');
     setCAcct('');
     setErr(null);
   }
@@ -177,7 +175,6 @@ export default function Orders({ data }: { data: AppData }) {
         orderId: order.id,
         amount: toMinor(amt),
         date: cDate,
-        method: cMethod,
         assetAccountId: effCAcct,
         note: '',
       });
@@ -317,16 +314,6 @@ export default function Orders({ data }: { data: AppData }) {
                     <label>
                       日期
                       <input type="date" value={cDate} onChange={(e) => setCDate(e.target.value)} />
-                    </label>
-                    <label>
-                      方式
-                      <select value={cMethod} onChange={(e) => setCMethod(e.target.value as SettlementMethod)}>
-                        {SETTLEMENT_METHODS.map(([m, label]) => (
-                          <option key={m} value={m}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
                     </label>
                     <label>
                       收款账户

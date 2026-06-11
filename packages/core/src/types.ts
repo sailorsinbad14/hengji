@@ -133,7 +133,6 @@ export interface Order {
   lines: OrderLine[];
 }
 
-export type SettlementMethod = 'wechat' | 'alipay' | 'bank' | 'cash' | 'other';
 /** in = 收款（来自客户）；out = 付款（给供应商，C 期）。 */
 export type SettlementDirection = 'in' | 'out';
 export type CounterpartyType = 'customer' | 'supplier';
@@ -150,8 +149,7 @@ export interface Settlement {
   /** 正数最小单位 */
   amount: Minor;
   date: string;
-  method: SettlementMethod;
-  /** 收/付款使用的资产账户（微信商户/对公账户/现金…） */
+  /** 收/付款使用的资产账户（微信商户/对公账户/现金…）——账户即渠道，不另设"方式"字段 */
   accountId: string;
   note: string;
   /** 生成的核销分录 id */

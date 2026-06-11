@@ -7,6 +7,7 @@
  *   的「我的账本」（personal）。空库不产生账本（由应用首启创建）。
  * - m3：生意 B 期（customers/orders/order_lines/settlements）；纯新增表，不动既有数据。
  * - m4：商品主数据 C1（products 表 + order_lines.product_id 列）；纯新增。
+ * - m5：去掉 settlements.method 列（收款账户即渠道，方式冗余）。
  */
 
 export interface SqlRunner {
@@ -169,7 +170,11 @@ const M4: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_products_book ON products(book_id)`,
 ];
 
-export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4];
+// m5：去掉 settlements.method 列——收款账户(account_id)即渠道，"方式"字段冗余。
+// 需 SQLite 3.35+（Node 24 内置 / sqlx 均满足）；method 无索引/约束，DROP 安全。
+const M5: string[] = [`ALTER TABLE settlements DROP COLUMN method`];
+
+export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5];
 
 export async function migrate(r: SqlRunner): Promise<void> {
   const v = await r.getVersion();

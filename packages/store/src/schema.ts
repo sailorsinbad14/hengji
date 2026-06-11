@@ -1,4 +1,4 @@
-import type { Account, Book, OrderLine, Posting, SettlementDirection, SettlementMethod, CounterpartyType, OrderStatus } from '@app/core';
+import type { Account, Book, OrderLine, Posting, SettlementDirection, CounterpartyType, OrderStatus } from '@app/core';
 import type {
   StoredAccount,
   StoredBook,
@@ -118,7 +118,6 @@ export interface SettlementRow {
   order_id: string | null;
   amount: number;
   date: string;
-  method: string;
   account_id: string;
   note: string;
   txn_id: string | null;
@@ -248,7 +247,6 @@ export function toSettlement(r: SettlementRow): StoredSettlement {
     orderId: r.order_id,
     amount: r.amount,
     date: r.date,
-    method: r.method as SettlementMethod,
     accountId: r.account_id,
     note: r.note,
     txnId: r.txn_id,

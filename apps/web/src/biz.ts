@@ -1,5 +1,5 @@
 import { accountBalance, collectionEntry, orderRevenueEntry, orderTotal } from '@app/core';
-import type { Customer, Order, SettlementMethod } from '@app/core';
+import type { Customer, Order } from '@app/core';
 import type { Repository, StoredAccount, StoredBook, StoredTransaction } from '@app/store';
 import { genId } from './db';
 
@@ -12,14 +12,6 @@ const AR_PARENT = '应收账款';
 const REVENUE = '营业收入';
 
 const arName = (customerName: string): string => `${AR_PARENT}/${customerName}`;
-
-export const SETTLEMENT_METHODS: Array<[SettlementMethod, string]> = [
-  ['wechat', '微信'],
-  ['alipay', '支付宝'],
-  ['bank', '银行'],
-  ['cash', '现金'],
-  ['other', '其他'],
-];
 
 /** 某客户当前应收余额（欠款）= 其应收子科目余额；无子科目则为 0。 */
 export function receivableBalance(accounts: StoredAccount[], txns: StoredTransaction[], customerName: string): number {
@@ -96,7 +88,6 @@ export async function recordCollection(
     orderId: string | null;
     amount: number;
     date: string;
-    method: SettlementMethod;
     assetAccountId: string;
     note: string;
   },
@@ -116,7 +107,6 @@ export async function recordCollection(
     orderId: opts.orderId,
     amount: opts.amount,
     date: opts.date,
-    method: opts.method,
     accountId: opts.assetAccountId,
     note: opts.note,
     txnId: entry.id,

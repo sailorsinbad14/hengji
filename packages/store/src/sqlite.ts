@@ -534,8 +534,8 @@ export class SqliteRepository implements Repository {
     const ts = this.now();
     this.db
       .prepare(
-        `INSERT INTO settlements (id, book_id, direction, counterparty_type, counterparty_id, order_id, amount, date, method, account_id, note, txn_id, created_at, updated_at, deleted)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+        `INSERT INTO settlements (id, book_id, direction, counterparty_type, counterparty_id, order_id, amount, date, account_id, note, txn_id, created_at, updated_at, deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       )
       .run(
         settlement.id,
@@ -546,7 +546,6 @@ export class SqliteRepository implements Repository {
         settlement.orderId,
         settlement.amount,
         settlement.date,
-        settlement.method,
         settlement.accountId,
         settlement.note,
         settlement.txnId,

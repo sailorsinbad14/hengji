@@ -534,8 +534,8 @@ export class TauriSqlRepository implements Repository {
     }
     const ts = this.now();
     await this.db.execute(
-      `INSERT INTO settlements (id, book_id, direction, counterparty_type, counterparty_id, order_id, amount, date, method, account_id, note, txn_id, created_at, updated_at, deleted)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0)`,
+      `INSERT INTO settlements (id, book_id, direction, counterparty_type, counterparty_id, order_id, amount, date, account_id, note, txn_id, created_at, updated_at, deleted)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 0)`,
       [
         settlement.id,
         settlement.bookId,
@@ -545,7 +545,6 @@ export class TauriSqlRepository implements Repository {
         settlement.orderId,
         settlement.amount,
         settlement.date,
-        settlement.method,
         settlement.accountId,
         settlement.note,
         settlement.txnId,
