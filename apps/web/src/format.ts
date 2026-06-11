@@ -1,13 +1,26 @@
 import { fromMinor } from '@app/core';
 import type { StoredAccount, StoredTransaction } from '@app/store';
 
-export function fmtMoney(minor: number): string {
+/** Phase 1 支持的币种（均 2 位小数）；可变精度（JPY/BTC）留 Phase 2。 */
+export const CURRENCIES = ['CNY', 'USD', 'EUR', 'HKD', 'GBP'] as const;
+export const CURRENCY_SYMBOL: Record<string, string> = { CNY: '¥', USD: '$', EUR: '€', HKD: 'HK$', GBP: '£' };
+export const CURRENCY_LABEL: Record<string, string> = {
+  CNY: '人民币 CNY',
+  USD: '美元 USD',
+  EUR: '欧元 EUR',
+  HKD: '港币 HKD',
+  GBP: '英镑 GBP',
+};
+
+/** 金额格式化；默认人民币。币种决定符号（Phase 1 统一 2 位小数）。 */
+export function fmtMoney(minor: number, currency = 'CNY'): string {
   const sign = minor < 0 ? '−' : '';
+  const sym = CURRENCY_SYMBOL[currency] ?? `${currency} `;
   const v = Math.abs(fromMinor(minor)).toLocaleString('zh-CN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
-  return `${sign}¥${v}`;
+  return `${sign}${sym}${v}`;
 }
 
 /** 本地时区的 YYYY-MM-DD（不能用 toISOString——那是 UTC，晚上会跨天） */
@@ -61,7 +74,7 @@ export function describeTxn(t: StoredTransaction, accounts: Map<string, StoredAc
       emoji: CATEGORY_EMOJI[cat.acc.name] ?? '💸',
       title: t.payee || cat.acc.name,
       sub: `${cat.acc.name} · ${real[0].acc!.name} · ${t.date}`,
-      amountText: fmtMoney(-cat.p.amount),
+      amountText: fmtMoney(-cat.p.amount, cat.p.currency),
       tone: 'neg',
       tags: t.tags,
     };
@@ -72,7 +85,7 @@ export function describeTxn(t: StoredTransaction, accounts: Map<string, StoredAc
       emoji: CATEGORY_EMOJI[cat.acc.name] ?? '💰',
       title: t.payee || cat.acc.name,
       sub: `${cat.acc.name} · ${real[0].acc!.name} · ${t.date}`,
-      amountText: (amt > 0 ? '+' : '') + fmtMoney(amt),
+      amountText: (amt > 0 ? '+' : '') + fmtMoney(amt, cat.p.currency),
       tone: amt >= 0 ? 'pos' : 'neg',
       tags: t.tags,
     };
@@ -82,7 +95,7 @@ export function describeTxn(t: StoredTransaction, accounts: Map<string, StoredAc
       emoji: '🏁',
       title: t.note || '期初余额',
       sub: `${real[0].acc!.name} · ${t.date}`,
-      amountText: fmtMoney(real[0].p.amount),
+      amountText: fmtMoney(real[0].p.amount, real[0].p.currency),
       tone: 'neutral',
       tags: t.tags,
     };
@@ -95,7 +108,7 @@ export function describeTxn(t: StoredTransaction, accounts: Map<string, StoredAc
         emoji: '🔁',
         title: `转账 → ${to.acc!.name}`,
         sub: `${from.acc!.name} → ${to.acc!.name} · ${t.date}`,
-        amountText: fmtMoney(to.p.amount),
+        amountText: fmtMoney(to.p.amount, to.p.currency),
         tone: 'neutral',
         tags: t.tags,
       };

@@ -11,18 +11,54 @@ export function accountBalance(txns: Transaction[], accountId: string): number {
   return sum;
 }
 
-/** 净资产 = 所有「资产 + 负债」账户余额之和（负债以负数存储，故直接相加）。 */
-export function netWorth(txns: Transaction[], accounts: Account[]): number {
+/**
+ * 多币种折算上下文：rates[币种] = 1 单位该币种折合多少展示币种（同 scale）；display = 展示币种。
+ * 展示币种自身 rate 视为 1；缺失汇率按 1 兜底（调用方应为在用币种补齐汇率）。
+ */
+export interface ConvertCtx {
+  rates: Record<string, number>;
+  display: string;
+}
+
+/** 把一笔原币最小单位金额折算到展示币种（Phase 1 同为 2 位小数，直接按汇率乘）。 */
+export function convertAmount(minor: number, from: string, ctx: ConvertCtx): number {
+  if (from === ctx.display) return minor;
+  return Math.round(minor * (ctx.rates[from] ?? 1));
+}
+
+/** 净资产 = 所有「资产 + 负债」账户余额之和（负债以负数存储，故直接相加）。
+ *  传 convert 则把各分录按其币种折算到展示币种；不传则原样相加（单币种／向后兼容）。 */
+export function netWorth(txns: Transaction[], accounts: Account[], convert?: ConvertCtx): number {
   const relevant = new Set(
     accounts.filter((a) => a.type === 'asset' || a.type === 'liability').map((a) => a.id),
   );
   let sum = 0;
   for (const t of txns) {
     for (const p of t.postings) {
-      if (relevant.has(p.accountId)) sum += p.amount;
+      if (relevant.has(p.accountId)) sum += convert ? convertAmount(p.amount, p.currency, convert) : p.amount;
     }
   }
   return sum;
+}
+
+/**
+ * 按币种分组的余额（原币精确，不折算）：默认资产+负债（净资产口径）。
+ * 用于财务总表「先按币种分组小计」。返回 Map<币种, 该币种净额>。
+ */
+export function balancesByCurrency(
+  txns: Transaction[],
+  accounts: Account[],
+  types: ReadonlyArray<Account['type']> = ['asset', 'liability'],
+): Map<string, number> {
+  const want = new Set(types);
+  const relevant = new Set(accounts.filter((a) => want.has(a.type)).map((a) => a.id));
+  const out = new Map<string, number>();
+  for (const t of txns) {
+    for (const p of t.postings) {
+      if (relevant.has(p.accountId)) out.set(p.currency, (out.get(p.currency) ?? 0) + p.amount);
+    }
+  }
+  return out;
 }
 
 /** 闭区间日期过滤（ISO YYYY-MM-DD，字典序即时间序）。 */
@@ -63,10 +99,19 @@ export type AccountingBasis = 'accrual' | 'cash';
 export function incomeExpense(
   txns: Transaction[],
   accounts: Account[],
-  opts: { period?: Period; tag?: string; basis?: AccountingBasis; receivableAccountIds?: Iterable<string> } = {},
+  opts: {
+    period?: Period;
+    tag?: string;
+    basis?: AccountingBasis;
+    receivableAccountIds?: Iterable<string>;
+    /** 多币种：传则把各分录按其币种折算到展示币种再汇总；不传则原样（单币种／向后兼容） */
+    convert?: ConvertCtx;
+  } = {},
 ): IncomeExpense {
   const typeOf = new Map(accounts.map((a) => [a.id, a.type] as const));
   const arSet = opts.basis === 'cash' ? new Set(opts.receivableAccountIds ?? []) : null;
+  const conv = (p: { amount: number; currency: string }): number =>
+    opts.convert ? convertAmount(p.amount, p.currency, opts.convert) : p.amount;
   let incomeSum = 0;
   let expenseSum = 0;
   let arDelta = 0;
@@ -75,9 +120,9 @@ export function incomeExpense(
     if (opts.tag && !t.tags.includes(opts.tag)) continue;
     for (const p of t.postings) {
       const ty = typeOf.get(p.accountId);
-      if (ty === 'income') incomeSum += p.amount;
-      else if (ty === 'expense') expenseSum += p.amount;
-      if (arSet?.has(p.accountId)) arDelta += p.amount;
+      if (ty === 'income') incomeSum += conv(p);
+      else if (ty === 'expense') expenseSum += conv(p);
+      if (arSet?.has(p.accountId)) arDelta += conv(p);
     }
   }
   const income = -incomeSum - arDelta;

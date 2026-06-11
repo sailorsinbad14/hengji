@@ -94,6 +94,16 @@ async function bootstrapDemo(): Promise<Repository> {
   await repo.addBudget({ id: genId(), bookId: me.book.id, accountId: me.byName('餐饮'), monthlyLimit: toMinor(1000) });
   await repo.addBudget({ id: genId(), bookId: me.book.id, accountId: me.byName('交通'), monthlyLimit: toMinor(300) });
   await repo.addBudget({ id: genId(), bookId: me.book.id, accountId: me.byName('购物'), monthlyLimit: toMinor(300) });
+  // 一个美元账户（演示多币种）：期初 $2000，与 CNY 账户在总表按币种分组 + 折合
+  const usdId = genId();
+  await repo.addAccount({ id: usdId, bookId: me.book.id, name: '美元储蓄', type: 'asset', parentId: null, currency: 'USD', archived: false });
+  await repo.addTransaction(
+    adjustBalanceEntry(
+      { bookId: me.book.id, date: daysAgo(40), accountId: usdId, currentBalance: 0, targetValue: toMinor(2000), counterAccountId: me.byName('期初余额'), currency: 'USD', note: '期初余额' },
+      genId,
+    ),
+  );
+  await repo.setSetting('app', 'fxRates', JSON.stringify({ USD: 7.1 })); // 演示汇率 1 USD = 7.1 CNY
 
   // —— 妻子的账本（个人 #2，演示同类型多账本）
   const wife = await createBookWithChart(repo, '妻子的账本', 'personal');

@@ -4,7 +4,7 @@ import type { AccountType } from '@app/core';
 import type { StoredAccount } from '@app/store';
 import type { AppData } from '../App';
 import { genId } from '../db';
-import { fmtMoney } from '../format';
+import { CURRENCIES, CURRENCY_LABEL, fmtMoney } from '../format';
 
 const GROUPS: Array<{ type: AccountType; label: string; hint: string }> = [
   { type: 'asset', label: '资产账户', hint: '现金 / 银行卡 / 钱包等' },
@@ -29,6 +29,7 @@ export default function Accounts({ data }: { data: AppData }) {
   const [draft, setDraft] = useState('');
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<AccountType>('expense');
+  const [newCurrency, setNewCurrency] = useState('CNY');
   const [err, setErr] = useState<string | null>(null);
 
   async function refresh(): Promise<void> {
@@ -39,7 +40,8 @@ export default function Accounts({ data }: { data: AppData }) {
   }, [book.id]);
 
   const usable = all.filter((a) => !a.deleted);
-  const currency = usable[0]?.currency ?? 'CNY';
+  // 仅资产/负债账户可选币种（单币种）；收入/支出/权益分类沿用人民币（跨币聚合在报表折算）
+  const currencyMatters = newType === 'asset' || newType === 'liability';
 
   async function add(): Promise<void> {
     setErr(null);
@@ -52,6 +54,7 @@ export default function Accounts({ data }: { data: AppData }) {
       setErr(`「${TYPE_LABEL[newType]}」下已有同名「${name}」`);
       return;
     }
+    const currency = currencyMatters ? newCurrency : 'CNY';
     await repo.addAccount({ id: genId(), bookId: book.id, name, type: newType, parentId: null, currency, archived: false });
     setNewName('');
     await refresh();
@@ -120,10 +123,11 @@ export default function Accounts({ data }: { data: AppData }) {
                     ) : (
                       <span className={`bname${a.archived ? ' muted' : ''}`}>
                         {a.name}
+                        {showBal && a.currency !== 'CNY' && <span className="chip"> {a.currency}</span>}
                         {a.archived && <span className="chip"> 已归档</span>}
                       </span>
                     )}
-                    {showBal && !a.archived && <span className="bnum">{fmtMoney(accountBalance(txns, a.id))}</span>}
+                    {showBal && !a.archived && <span className="bnum">{fmtMoney(accountBalance(txns, a.id), a.currency)}</span>}
                     <div className="arow-btns">
                       {managed ? (
                         <span className="muted" style={{ fontSize: 12 }}>自动管理</span>
@@ -185,6 +189,18 @@ export default function Accounts({ data }: { data: AppData }) {
               ))}
             </select>
           </label>
+          {currencyMatters && (
+            <label>
+              币种
+              <select value={newCurrency} onChange={(e) => setNewCurrency(e.target.value)}>
+                {CURRENCIES.map((c) => (
+                  <option key={c} value={c}>
+                    {CURRENCY_LABEL[c]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
         <p className="muted" style={{ marginBottom: 10 }}>
           {GROUPS.find((g) => g.type === newType)?.hint}

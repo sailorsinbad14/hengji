@@ -99,4 +99,22 @@ describe('balance helpers', () => {
       ]),
     ).toThrow();
   });
+
+  it('多币种换汇：两条原币腿豁免求和=0（−$1000 / +¥6800）', () => {
+    const forex = [
+      { id: 'p1', txnId: 't1', accountId: 'usd', amount: -100000, currency: 'USD' },
+      { id: 'p2', txnId: 't1', accountId: 'cny', amount: 680000, currency: 'CNY' },
+    ];
+    expect(isBalanced(forex)).toBe(true);
+    expect(() => assertBalanced(forex)).not.toThrow();
+  });
+
+  it('同币种仍须平衡：单币种未平衡照样抛', () => {
+    const bad = [
+      { id: 'p1', txnId: 't1', accountId: 'usd1', amount: -100000, currency: 'USD' },
+      { id: 'p2', txnId: 't1', accountId: 'usd2', amount: 90000, currency: 'USD' },
+    ];
+    expect(isBalanced(bad)).toBe(false);
+    expect(() => assertBalanced(bad)).toThrow();
+  });
 });

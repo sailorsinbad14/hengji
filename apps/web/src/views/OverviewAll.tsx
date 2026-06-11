@@ -1,4 +1,5 @@
-import { incomeExpense, netWorth } from '@app/core';
+import { balancesByCurrency, incomeExpense, netWorth } from '@app/core';
+import type { ConvertCtx } from '@app/core';
 import type { StoredAccount, StoredBook, StoredSetting, StoredTransaction } from '@app/store';
 import { BOOK_META } from '../db';
 import { receivableAccountIds } from '../biz';
@@ -10,12 +11,14 @@ export default function OverviewAll({
   accounts,
   txns,
   settings,
+  convert,
   onOpen,
 }: {
   books: StoredBook[];
   accounts: StoredAccount[];
   txns: StoredTransaction[];
   settings: StoredSetting[];
+  convert: ConvertCtx;
   onOpen: (id: string) => void;
 }) {
   const month = currentMonth();
@@ -25,7 +28,10 @@ export default function OverviewAll({
   const visible = new Set(books.map((b) => b.id));
   const va = accounts.filter((x) => visible.has(x.bookId));
   const vt = txns.filter((x) => visible.has(x.bookId));
-  const totalNw = netWorth(vt, va);
+  const totalNw = netWorth(vt, va, convert); // 折合到展示币种(CNY)
+  // 净资产按币种分组（原币精确）——多于一种币种时展示分组小计
+  const byCur = [...balancesByCurrency(vt, va).entries()].filter(([, v]) => v !== 0);
+  const multiCurrency = byCur.length > 1;
 
   // 各账本按自身记账口径算收支，再求和——与各账本 Dashboard 数字一致（避免同一生意账本两处打架）。
   const perBook = books.map((b) => {
@@ -33,8 +39,8 @@ export default function OverviewAll({
     const t = txns.filter((x) => x.bookId === b.id);
     const basis = basisOf(settings, b.id);
     const arIds = basis === 'cash' ? receivableAccountIds(a) : undefined;
-    const ie = incomeExpense(t, a, { period, basis, receivableAccountIds: arIds });
-    return { book: b, nw: netWorth(t, a), ie, txCount: t.length };
+    const ie = incomeExpense(t, a, { period, basis, receivableAccountIds: arIds, convert });
+    return { book: b, nw: netWorth(t, a, convert), ie, txCount: t.length };
   });
   const totalIe = perBook.reduce(
     (s, x) => ({ income: s.income + x.ie.income, expense: s.expense + x.ie.expense, net: s.net + x.ie.net }),
@@ -49,8 +55,17 @@ export default function OverviewAll({
       </div>
       <div className="stats">
         <div className="stat hero-stat">
-          <div className="k">全部净资产（{books.length} 个账本汇总）</div>
+          <div className="k">全部净资产{multiCurrency ? '（折合人民币）' : ''}（{books.length} 个账本汇总）</div>
           <div className="v">{fmtMoney(totalNw)}</div>
+          {multiCurrency && (
+            <div className="cur-breakdown">
+              {byCur.map(([cur, amt]) => (
+                <span key={cur} className="cur-chip">
+                  {fmtMoney(amt, cur)}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <div className="stat">
           <div className="k">本月总收入</div>

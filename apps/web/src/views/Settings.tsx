@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import type { AccountingBasis } from '@app/core';
 import type { AppData } from '../App';
+import { CURRENCIES, CURRENCY_LABEL } from '../format';
 import {
   BASIS_KEY,
+  FX_RATES_KEY,
   RECON_DAY_KEY,
   RECON_LEAD_KEY,
   basisOf,
@@ -38,6 +40,24 @@ export default function Settings({ data }: { data: AppData }) {
     setSaving(true);
     try {
       await repo.setSetting(book.id, key, value);
+      await reload();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // 汇率表是 app 级（全局共用），写 scope='app'
+  async function saveRate(currency: string, raw: string): Promise<void> {
+    const n = Number(raw);
+    const next: Record<string, number> = {};
+    for (const c of CURRENCIES) {
+      if (c === 'CNY') continue;
+      const r = c === currency ? n : data.convert.rates[c];
+      if (typeof r === 'number' && Number.isFinite(r) && r > 0) next[c] = r;
+    }
+    setSaving(true);
+    try {
+      await repo.setSetting('app', FX_RATES_KEY, JSON.stringify(next));
       await reload();
     } finally {
       setSaving(false);
@@ -108,6 +128,30 @@ export default function Settings({ data }: { data: AppData }) {
               </select>
             </label>
           )}
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>汇率表（全局）</h3>
+        <p className="muted small">
+          多币种账户在财务总表里按币种分组，并用这里的汇率折合成人民币总值。汇率全局共用、所有账本一致；折合仅用于展示，不改原币余额。
+        </p>
+        <div className="fx-grid">
+          {CURRENCIES.filter((c) => c !== 'CNY').map((c) => (
+            <label key={c} className="fx-row">
+              <span>1 {CURRENCY_LABEL[c]} =</span>
+              <span className="fx-input">
+                <input
+                  inputMode="decimal"
+                  defaultValue={String(data.convert.rates[c] ?? '')}
+                  placeholder="如 7.10"
+                  onBlur={(e) => void saveRate(c, e.target.value)}
+                  disabled={saving}
+                />
+                <span className="muted">元</span>
+              </span>
+            </label>
+          ))}
         </div>
       </div>
     </>

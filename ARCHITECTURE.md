@@ -50,9 +50,12 @@
 - **C2 库存（仅库存品）**：数量从出入库流水聚合（不存死值）；入仓＝进货/补货动作（+，按进价）；出货＝订单完成自动（−，按移动加权均价结转营业成本）→ 每单/每客户毛利。
 - **B 收尾**：应收账龄 + 到期提醒（用 customer.dueDays + 订单日期）。
 
-## 多币种（个人追踪派，2026-06 评审通过）
+## 多币种（个人追踪派，2026-06 评审通过；✅ Phase 1 已落地）
 
 **定位**：原列「明确不做」，现升级为规划功能。采用**个人多币种净值追踪**模型（Wallet/MoneyWiz 路线），而非严格企业 FX P&L。
+
+**✅ Phase 1 已落地（2 位法币 CNY/USD/EUR/HKD/GBP）**：core `assertBalanced`/`isBalanced` 改按币种分组（单币种求和=0、多币种=换汇豁免）；reports `convertAmount`/`balancesByCurrency` + `netWorth`/`incomeExpense` 加可选 `convert`（不传=原样、向后兼容）。web：`fmtMoney(minor,currency)` 符号感知；账户新建币种下拉（仅资产/负债）；QuickEntry 分录币种跟随账户、跨币转账暂拦截；设置页「汇率表」(app 级，币种→对 CNY 汇率)；Dashboard/财务总表净资产折合 CNY + 按币种分组 chip；侧栏/流水按原币符号显示。
+**⏳ Phase 2**：换汇/跨币转账录入（core `forexEntry` 两条原币腿）；可变精度（JPY=0/BTC=8，scale 按币种）；展示币种可切换；多币子账户 parentId 分组显示。
 
 - **币种以账户为单位**：`Account.currency` 启用；**资产/负债账户单一币种**（一家多币银行＝拆成 N 个单币子账户，用 parentId 父节点分组显示）；**收入/支出分类可跨币聚合**（报表时折算）。
 - **每条 posting 的币种 = 其账户的币种**。

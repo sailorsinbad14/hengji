@@ -1,4 +1,4 @@
-import { accountBalance, incomeExpense, netWorth, unclearedCount } from '@app/core';
+import { accountBalance, balancesByCurrency, convertAmount, incomeExpense, netWorth, unclearedCount } from '@app/core';
 import type { AppData } from '../App';
 import { currentMonth, fmtMoney } from '../format';
 import { receivableAccountIds, receivableSummary } from '../biz';
@@ -50,20 +50,24 @@ function Donut({ slices, total }: { slices: Array<{ name: string; value: number 
 }
 
 export default function Dashboard({ data }: { data: AppData }) {
-  const { accounts, txns, book, settings } = data;
+  const { accounts, txns, book, settings, convert } = data;
   const month = currentMonth();
   const period = { from: `${month}-01`, to: `${month}-31` };
-  const nw = netWorth(txns, accounts);
+  const nw = netWorth(txns, accounts, convert);
   const basis = basisOf(settings, book.id);
   const arIds = basis === 'cash' ? receivableAccountIds(accounts) : undefined;
-  const ie = incomeExpense(txns, accounts, { period, basis, receivableAccountIds: arIds });
+  const ie = incomeExpense(txns, accounts, { period, basis, receivableAccountIds: arIds, convert });
+  // 资产饼图：各资产账户余额折合到展示币种(CNY)再比例分布（多币种下原币不可直接相加）
   const slices = accounts
     .filter((a) => a.type === 'asset')
-    .map((a) => ({ name: a.name, value: accountBalance(txns, a.id) }))
+    .map((a) => ({ name: a.name, value: convertAmount(accountBalance(txns, a.id), a.currency, convert) }))
     .filter((s) => s.value > 0);
   const totalAssets = slices.reduce((s, x) => s + x.value, 0);
   const netLabel = book.type === 'business' ? '本月利润' : '本月结余';
   const recv = book.type === 'business' ? receivableSummary(accounts, txns) : null;
+  // 多币种：账户跨币种时，净资产标头标注「折合」+ 各币种小计
+  const byCur = [...balancesByCurrency(txns, accounts).entries()].filter(([, v]) => v !== 0);
+  const multiCurrency = byCur.length > 1;
 
   // 滚动对账状态：仅对「已开始对账」的账本显示（有任一已核销分录），免扰不对账的用户。
   const hasReconciled = txns.some((t) => t.postings.some((p) => p.cleared));
@@ -87,8 +91,17 @@ export default function Dashboard({ data }: { data: AppData }) {
       </div>
       <div className="stats">
         <div className="stat hero-stat">
-          <div className="k">净资产</div>
+          <div className="k">净资产{multiCurrency ? '（折合人民币）' : ''}</div>
           <div className="v">{fmtMoney(nw)}</div>
+          {multiCurrency && (
+            <div className="cur-breakdown">
+              {byCur.map(([cur, amt]) => (
+                <span key={cur} className="cur-chip">
+                  {fmtMoney(amt, cur)}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <div className="stat">
           <div className="k">本月收入</div>

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { expandEntry, accountBalance, netWorth, incomeExpense } from '../src/index';
-import type { Account, Transaction } from '../src/index';
+import { expandEntry, accountBalance, netWorth, incomeExpense, balancesByCurrency, convertAmount } from '../src/index';
+import type { Account, ConvertCtx, Transaction } from '../src/index';
 
 const B = 'b1';
 
@@ -108,6 +108,53 @@ describe('reports', () => {
       ];
       const ie = incomeExpense(prepay, accts, { period, basis: 'cash', receivableAccountIds: ['ar'] });
       expect(ie.income).toBe(80000); // 0 − ΔAR(−80000) = 80000
+    });
+  });
+
+  describe('多币种折算', () => {
+    const ctx: ConvertCtx = { rates: { USD: 7.1, CNY: 1 }, display: 'CNY' };
+
+    it('convertAmount：原币 → 展示币（同 scale 按汇率乘，展示币自身=1）', () => {
+      expect(convertAmount(100000, 'USD', ctx)).toBe(710000); // $1000 → ¥7100
+      expect(convertAmount(500000, 'CNY', ctx)).toBe(500000); // 展示币不折
+      expect(convertAmount(100000, 'JPY', ctx)).toBe(100000); // 缺汇率按 1 兜底
+    });
+
+    // CNY 银行 ¥5000 + USD 账户 $1000 两个资产账户
+    const mc: Account[] = [
+      { id: 'cny', bookId: B, name: '招行卡', type: 'asset', parentId: null, currency: 'CNY', archived: false },
+      { id: 'usd', bookId: B, name: '美元账户', type: 'asset', parentId: null, currency: 'USD', archived: false },
+      { id: 'eq', bookId: B, name: '期初余额', type: 'equity', parentId: null, currency: 'CNY', archived: false },
+    ];
+    function mcTxns(): Transaction[] {
+      let n = 0;
+      const g = (): string => `m${++n}`;
+      return [
+        { id: 'o1', bookId: B, date: '2026-06-01', payee: '', note: '', tags: [], postings: [
+          { id: g(), txnId: 'o1', accountId: 'cny', amount: 500000, currency: 'CNY' },
+          { id: g(), txnId: 'o1', accountId: 'eq', amount: -500000, currency: 'CNY' },
+        ] },
+        { id: 'o2', bookId: B, date: '2026-06-01', payee: '', note: '', tags: [], postings: [
+          { id: g(), txnId: 'o2', accountId: 'usd', amount: 100000, currency: 'USD' },
+          { id: g(), txnId: 'o2', accountId: 'eq', amount: -100000, currency: 'USD' },
+        ] },
+      ];
+    }
+
+    it('balancesByCurrency：按币种分组原币小计', () => {
+      const m = balancesByCurrency(mcTxns(), mc);
+      expect(m.get('CNY')).toBe(500000); // ¥5000
+      expect(m.get('USD')).toBe(100000); // $1000
+    });
+
+    it('netWorth 传 convert：折算到展示币种求和', () => {
+      const nw = netWorth(mcTxns(), mc, ctx);
+      expect(nw).toBe(500000 + 710000); // ¥5000 + ($1000×7.1)=¥7100 → ¥12100
+    });
+
+    it('netWorth 不传 convert：原样相加（向后兼容，单币种正确）', () => {
+      const cnyOnly = mcTxns().filter((t) => t.id === 'o1');
+      expect(netWorth(cnyOnly, mc)).toBe(500000);
     });
   });
 });

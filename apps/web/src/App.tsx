@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { accountBalance, unclearedCount } from '@app/core';
-import type { BookType } from '@app/core';
+import type { BookType, ConvertCtx } from '@app/core';
 import type { Repository, StoredAccount, StoredBook, StoredBudget, StoredSetting, StoredTransaction } from '@app/store';
 import { BOOK_META, createBookWithChart, isDesktop, ready } from './db';
 import { fmtMoney } from './format';
-import { reconcileDayOf, reconcileLeadOf, reconcileTargetDate, reconcileWindowOpen } from './settings';
+import { convertCtxOf, reconcileDayOf, reconcileLeadOf, reconcileTargetDate, reconcileWindowOpen } from './settings';
 import OverviewAll from './views/OverviewAll';
 import Dashboard from './views/Dashboard';
 import Transactions from './views/Transactions';
@@ -29,6 +29,8 @@ export interface AppData {
   budgets: StoredBudget[];
   /** 当前账本作用域内的设置（KV） */
   settings: StoredSetting[];
+  /** 多币种折算上下文（展示币种 + 汇率表，app 级全局） */
+  convert: ConvertCtx;
   reload: () => Promise<void>;
 }
 
@@ -108,6 +110,9 @@ export default function App() {
     [accounts, txns, budgets, settings, cur],
   );
 
+  // 多币种折算上下文（app 级汇率表）；在任何提前 return 之前调用，保证 Hook 顺序稳定。
+  const convert = useMemo(() => convertCtxOf(settings), [settings]);
+
   // 对账提醒：已配置对账日 + 进入提前窗口 + 该账本仍有未核销分录（已对账则不扰）。
   // 须在任何提前 return 之前调用，保证 Hook 顺序稳定。
   const reconReminder = useMemo(() => {
@@ -148,7 +153,7 @@ export default function App() {
   }
 
   const data: AppData | null = curBook
-    ? { repo, book: curBook, ...scoped, reload: () => loadFrom(repo) }
+    ? { repo, book: curBook, ...scoped, convert, reload: () => loadFrom(repo) }
     : null;
   const tabs = curBook ? TABS[curBook.type] : [];
   const showReminder = reconReminder && curBook && !reconDismissed.has(curBook.id);
@@ -210,7 +215,7 @@ export default function App() {
                 return (
                   <div className="acct" key={a.id}>
                     <span className="nm">{a.name}</span>
-                    <span className={`bal${bal < 0 ? ' neg' : ''}`}>{fmtMoney(bal)}</span>
+                    <span className={`bal${bal < 0 ? ' neg' : ''}`}>{fmtMoney(bal, a.currency)}</span>
                   </div>
                 );
               })}
@@ -225,7 +230,7 @@ export default function App() {
       </aside>
       <main className="main">
         {cur === 'all' || !data ? (
-          <OverviewAll books={books} accounts={accounts} txns={txns} settings={settings} onOpen={openBook} />
+          <OverviewAll books={books} accounts={accounts} txns={txns} settings={settings} convert={convert} onOpen={openBook} />
         ) : (
           <>
             {showReminder && (

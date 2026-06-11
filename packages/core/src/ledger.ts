@@ -1,20 +1,37 @@
 import type { Posting, Transaction } from './types';
 import { assertMinor } from './money';
 
-/** 一组 posting 的金额之和。 */
+/** 一组 posting 的金额之和（不分币种，仅内部/单币种使用）。 */
 export function balanceOf(postings: Posting[]): number {
   return postings.reduce((sum, p) => sum + p.amount, 0);
 }
 
+/** 按币种分组求和。 */
+function sumByCurrency(postings: Posting[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const p of postings) m.set(p.currency, (m.get(p.currency) ?? 0) + p.amount);
+  return m;
+}
+
+/**
+ * 平衡规则（多币种）：
+ * - 单一币种：分录求和必须 = 0（普通交易，现有 CNY 账目不受影响）。
+ * - 多币种：视为「换汇/跨币转账」——两条原币腿本就不等价，豁免求和=0。
+ * 空分录视为平衡。
+ */
 export function isBalanced(postings: Posting[]): boolean {
-  return balanceOf(postings) === 0;
+  const byCur = sumByCurrency(postings);
+  if (byCur.size <= 1) return (byCur.values().next().value ?? 0) === 0;
+  return true; // 多币种：换汇豁免
 }
 
 export function assertBalanced(postings: Posting[]): void {
-  const b = balanceOf(postings);
-  if (b !== 0) {
-    throw new Error(`交易未平衡：postings 之和为 ${b}，应为 0`);
+  const byCur = sumByCurrency(postings);
+  if (byCur.size <= 1) {
+    const b = byCur.values().next().value ?? 0;
+    if (b !== 0) throw new Error(`交易未平衡：postings 之和为 ${b}，应为 0`);
   }
+  // 多币种（换汇）：豁免同币种求和=0
 }
 
 export type EntryKind = 'expense' | 'income' | 'transfer';

@@ -1,4 +1,4 @@
-import type { AccountingBasis } from '@app/core';
+import type { AccountingBasis, ConvertCtx } from '@app/core';
 import type { StoredSetting } from '@app/store';
 import { localISO } from './format';
 
@@ -56,4 +56,33 @@ export function reconcileWindowOpen(today: Date, day: string, lead: number): boo
   const end = new Date(y!, mo! - 1, d!);
   const t = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   return t >= start && t <= end;
+}
+
+// —— 多币种汇率表（app 级，全局共用）——
+/** 各币种对展示币种(CNY)的汇率，存 app 级 JSON：{ "USD": 7.1, ... }。 */
+export const FX_RATES_KEY = 'fxRates';
+/** Phase 1 展示币种固定 CNY（切换留 Phase 2）。 */
+export const DISPLAY_CURRENCY = 'CNY';
+
+/** 读汇率表（含展示币种自身=1）；坏数据降级为仅 {CNY:1}。 */
+export function fxRatesOf(settings: StoredSetting[]): Record<string, number> {
+  const rates: Record<string, number> = { [DISPLAY_CURRENCY]: 1 };
+  const row = settings.find((s) => s.scope === 'app' && s.key === FX_RATES_KEY);
+  if (row) {
+    try {
+      const parsed = JSON.parse(row.value) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(parsed)) {
+        const n = Number(v);
+        if (Number.isFinite(n) && n > 0) rates[k] = n;
+      }
+    } catch {
+      /* 坏 JSON 忽略 */
+    }
+  }
+  return rates;
+}
+
+/** 折算上下文（展示币种 + 汇率表）。 */
+export function convertCtxOf(settings: StoredSetting[]): ConvertCtx {
+  return { rates: fxRatesOf(settings), display: DISPLAY_CURRENCY };
 }

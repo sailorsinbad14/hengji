@@ -267,6 +267,18 @@ input:focus, select:focus { outline: 2px solid var(--brand-50); border-color: va
 .rec-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 12px; }
 .rec-ok { color: var(--brand-700); font-size: 13px; margin-top: 8px; }
 
+/* 多币种 */
+.fx-grid { display: grid; gap: 10px; margin-top: 12px; }
+.fx-row { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-soft); }
+.fx-row > span:first-child { min-width: 130px; }
+.fx-input { display: inline-flex; align-items: center; gap: 6px; }
+.fx-input input { width: 110px; }
+.cur-breakdown { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.cur-chip {
+  font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
+  background: #eef1f5; color: var(--ink-soft); font-variant-numeric: tabular-nums;
+}
+
 /* 滚动对账徽章（Dashboard 头部） */
 .recon-badge {
   font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
