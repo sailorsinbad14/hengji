@@ -1,7 +1,8 @@
 import { accountBalance, incomeExpense, netWorth } from '@app/core';
 import type { AppData } from '../App';
 import { currentMonth, fmtMoney } from '../format';
-import { receivableSummary } from '../biz';
+import { receivableAccountIds, receivableSummary } from '../biz';
+import { basisOf } from '../settings';
 import TxnRow from '../components/TxnRow';
 import QuickEntry from './QuickEntry';
 
@@ -49,11 +50,13 @@ function Donut({ slices, total }: { slices: Array<{ name: string; value: number 
 }
 
 export default function Dashboard({ data }: { data: AppData }) {
-  const { accounts, txns, book } = data;
+  const { accounts, txns, book, settings } = data;
   const month = currentMonth();
   const period = { from: `${month}-01`, to: `${month}-31` };
   const nw = netWorth(txns, accounts);
-  const ie = incomeExpense(txns, accounts, { period });
+  const basis = basisOf(settings, book.id);
+  const arIds = basis === 'cash' ? receivableAccountIds(accounts) : undefined;
+  const ie = incomeExpense(txns, accounts, { period, basis, receivableAccountIds: arIds });
   const slices = accounts
     .filter((a) => a.type === 'asset')
     .map((a) => ({ name: a.name, value: accountBalance(txns, a.id) }))
@@ -66,7 +69,10 @@ export default function Dashboard({ data }: { data: AppData }) {
     <>
       <div className="main-head">
         <h2>{book.name} · 总览</h2>
-        <span className="muted">{month}</span>
+        <span className="muted">
+          {basis === 'cash' && <span className="basis-tag">收付实现制</span>}
+          {month}
+        </span>
       </div>
       <div className="stats">
         <div className="stat hero-stat">

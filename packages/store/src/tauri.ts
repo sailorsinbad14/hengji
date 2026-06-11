@@ -16,6 +16,7 @@ import type {
   StoredCustomer,
   StoredOrder,
   StoredProduct,
+  StoredSetting,
   StoredSettlement,
   StoredTransaction,
   TxnQuery,
@@ -31,6 +32,7 @@ import {
   toOrderLine,
   toPosting,
   toProduct,
+  toSetting,
   toSettlement,
   toTxn,
 } from './schema';
@@ -43,6 +45,7 @@ import type {
   OrderRow,
   PostingRow,
   ProductRow,
+  SettingRow,
   SettlementRow,
   TxnRow,
 } from './schema';
@@ -625,5 +628,29 @@ export class TauriSqlRepository implements Repository {
       [next.name, next.costPrice, next.salePrice, next.isStock ? 1 : 0, next.unit, next.archived ? 1 : 0, next.updatedAt, id],
     );
     return (await this.getProduct(id))!;
+  }
+
+  // ---- 设置（KV）----
+  async getSetting(scope: string, key: string): Promise<StoredSetting | null> {
+    const rows = await this.db.select<SettingRow[]>('SELECT * FROM settings WHERE scope = $1 AND key = $2', [scope, key]);
+    return rows[0] ? toSetting(rows[0]) : null;
+  }
+
+  async setSetting(scope: string, key: string, value: string): Promise<StoredSetting> {
+    const ts = this.now();
+    await this.db.execute(
+      `INSERT INTO settings (scope, key, value, updated_at) VALUES ($1, $2, $3, $4)
+       ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      [scope, key, value, ts],
+    );
+    return (await this.getSetting(scope, key))!;
+  }
+
+  async listSettings(scope?: string): Promise<StoredSetting[]> {
+    const rows =
+      scope === undefined
+        ? await this.db.select<SettingRow[]>('SELECT * FROM settings')
+        : await this.db.select<SettingRow[]>('SELECT * FROM settings WHERE scope = $1', [scope]);
+    return rows.map(toSetting);
   }
 }

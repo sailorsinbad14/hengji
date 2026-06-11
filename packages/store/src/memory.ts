@@ -15,6 +15,7 @@ import type {
   StoredCustomer,
   StoredOrder,
   StoredProduct,
+  StoredSetting,
   StoredSettlement,
   StoredTransaction,
   TxnQuery,
@@ -42,6 +43,7 @@ export class InMemoryRepository implements Repository {
   private readonly orders = new Map<string, StoredOrder>();
   private readonly settlements = new Map<string, StoredSettlement>();
   private readonly products = new Map<string, StoredProduct>();
+  private readonly settings = new Map<string, StoredSetting>();
   private readonly now: Clock;
 
   constructor(opts: { now?: Clock } = {}) {
@@ -369,6 +371,27 @@ export class InMemoryRepository implements Repository {
     const updated: StoredProduct = { ...p, ...patch, updatedAt: this.now() };
     this.products.set(id, updated);
     return clone(updated);
+  }
+
+  // ---- 设置（KV）----
+  async getSetting(scope: string, key: string): Promise<StoredSetting | null> {
+    const s = this.settings.get(`${scope} ${key}`);
+    return s ? clone(s) : null;
+  }
+
+  async setSetting(scope: string, key: string, value: string): Promise<StoredSetting> {
+    const stored: StoredSetting = { scope, key, value, updatedAt: this.now() };
+    this.settings.set(`${scope} ${key}`, stored);
+    return clone(stored);
+  }
+
+  async listSettings(scope?: string): Promise<StoredSetting[]> {
+    const out: StoredSetting[] = [];
+    for (const s of this.settings.values()) {
+      if (scope !== undefined && s.scope !== scope) continue;
+      out.push(clone(s));
+    }
+    return out;
   }
 }
 

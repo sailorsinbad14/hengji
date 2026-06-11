@@ -442,4 +442,27 @@ export function runRepositoryContract(name: string, makeRepo: (now: Clock) => Re
       expect(got!.lines.map((l) => l.productId)).toEqual(['p1', null]);
     });
   });
+
+  describe(`${name} · 设置（KV）`, () => {
+    it('set/get + upsert 覆盖 + scope 隔离 + list 过滤', async () => {
+      const repo = makeRepo(fakeClock());
+      expect(await repo.getSetting(B1, 'accountingBasis')).toBeNull();
+      const s = await repo.setSetting(B1, 'accountingBasis', 'cash');
+      expect(s.value).toBe('cash');
+      expect(s.updatedAt.startsWith('2026-01-01')).toBe(true);
+      expect((await repo.getSetting(B1, 'accountingBasis'))!.value).toBe('cash');
+      // upsert：同 scope+key 覆盖，不新增行
+      const before = (await repo.getSetting(B1, 'accountingBasis'))!.updatedAt;
+      const s2 = await repo.setSetting(B1, 'accountingBasis', 'accrual');
+      expect(s2.value).toBe('accrual');
+      expect(s2.updatedAt > before).toBe(true);
+      expect((await repo.listSettings(B1)).length).toBe(1);
+      // scope 隔离：另一账本与 app 级互不串
+      await repo.setSetting(B2, 'accountingBasis', 'cash');
+      await repo.setSetting('app', 'theme', 'dark');
+      expect((await repo.getSetting(B2, 'accountingBasis'))!.value).toBe('cash');
+      expect((await repo.listSettings(B1)).map((x) => x.key)).toEqual(['accountingBasis']);
+      expect((await repo.listSettings()).length).toBe(3);
+    });
+  });
 }

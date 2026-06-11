@@ -8,6 +8,7 @@
  * - m3：生意 B 期（customers/orders/order_lines/settlements）；纯新增表，不动既有数据。
  * - m4：商品主数据 C1（products 表 + order_lines.product_id 列）；纯新增。
  * - m5：去掉 settlements.method 列（收款账户即渠道，方式冗余）。
+ * - m6：通用设置表 settings（scope+key 主键，value 字符串）；app/账本级共用，纯新增。
  */
 
 export interface SqlRunner {
@@ -174,7 +175,19 @@ const M4: string[] = [
 // 需 SQLite 3.35+（Node 24 内置 / sqlx 均满足）；method 无索引/约束，DROP 安全。
 const M5: string[] = [`ALTER TABLE settlements DROP COLUMN method`];
 
-export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5];
+// m6：通用设置表（KV）。scope='app' 或账本 id；(scope,key) 主键即 upsert 依据。
+// 无软删除——设置是覆盖语义，删除即清空 value 或删行。纯新增表。
+const M6: string[] = [
+  `CREATE TABLE IF NOT EXISTS settings (
+    scope TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (scope, key)
+  )`,
+];
+
+export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5, M6];
 
 export async function migrate(r: SqlRunner): Promise<void> {
   const v = await r.getVersion();

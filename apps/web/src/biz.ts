@@ -19,6 +19,11 @@ export function receivableBalance(accounts: StoredAccount[], txns: StoredTransac
   return ar ? accountBalance(txns, ar.id) : 0;
 }
 
+/** 全账本应收账款科目 id（顶层「应收账款」+ 各客户子科目）。供收付实现制按 ΔAR 折算实收用。 */
+export function receivableAccountIds(accounts: StoredAccount[]): string[] {
+  return accounts.filter((a) => a.name === AR_PARENT || a.name.startsWith(`${AR_PARENT}/`)).map((a) => a.id);
+}
+
 /** 全账本客户往来汇总：应收合计（别人欠你）/ 预收合计（你欠别人，多付的钱）。遍历所有「应收账款/*」子科目。 */
 export function receivableSummary(
   accounts: StoredAccount[],

@@ -60,4 +60,54 @@ describe('reports', () => {
       net: 497000,
     });
   });
+
+  describe('incomeExpense 收付实现制（basis: cash）', () => {
+    // 赊销→回款场景：6 月完成订单确认收入 ¥2500（借应收 贷营业收入），同月仅回款 ¥1000。
+    const ar: Account = { id: 'ar', bookId: B, name: '应收账款/张三', type: 'asset', parentId: null, currency: 'CNY', archived: false };
+    function bizTxns(): Transaction[] {
+      let n = 0;
+      const gen = (): string => `c${++n}`;
+      return [
+        // 完成订单：借应收 250000 / 贷营业收入 250000
+        { id: 'rev', bookId: B, date: '2026-06-05', payee: '张三', note: '', tags: [], postings: [
+          { id: gen(), txnId: 'rev', accountId: 'ar', amount: 250000, currency: 'CNY' },
+          { id: gen(), txnId: 'rev', accountId: 'sales', amount: -250000, currency: 'CNY' },
+        ] },
+        // 回款 100000：借银行 / 贷应收
+        { id: 'col', bookId: B, date: '2026-06-08', payee: '张三', note: '', tags: [], postings: [
+          { id: gen(), txnId: 'col', accountId: 'bank', amount: 100000, currency: 'CNY' },
+          { id: gen(), txnId: 'col', accountId: 'ar', amount: -100000, currency: 'CNY' },
+        ] },
+      ];
+    }
+    const accts = [...accounts, ar];
+    const period = { from: '2026-06-01', to: '2026-06-30' };
+
+    it('权责发生制：确认即收入（全额 250000）', () => {
+      expect(incomeExpense(bizTxns(), accts, { period, basis: 'accrual' }).income).toBe(250000);
+    });
+
+    it('收付实现制：只算实收（100000），需传应收科目 id', () => {
+      const ie = incomeExpense(bizTxns(), accts, { period, basis: 'cash', receivableAccountIds: ['ar'] });
+      expect(ie.income).toBe(100000); // 250000 − ΔAR(250000−100000=150000)
+    });
+
+    it('收付实现制不传应收 id 时退化为权责（无 AR 可抵）', () => {
+      expect(incomeExpense(bizTxns(), accts, { period, basis: 'cash' }).income).toBe(250000);
+    });
+
+    it('预收（先收款后开单）：收款当期即计为实收', () => {
+      let n = 0;
+      const gen = (): string => `p${++n}`;
+      const prepay: Transaction[] = [
+        // 先收款 80000：借银行 / 贷应收（AR 转负 = 预收）
+        { id: 'pre', bookId: B, date: '2026-06-02', payee: '李四', note: '', tags: [], postings: [
+          { id: gen(), txnId: 'pre', accountId: 'bank', amount: 80000, currency: 'CNY' },
+          { id: gen(), txnId: 'pre', accountId: 'ar', amount: -80000, currency: 'CNY' },
+        ] },
+      ];
+      const ie = incomeExpense(prepay, accts, { period, basis: 'cash', receivableAccountIds: ['ar'] });
+      expect(ie.income).toBe(80000); // 0 − ΔAR(−80000) = 80000
+    });
+  });
 });

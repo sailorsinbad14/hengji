@@ -46,18 +46,30 @@ export interface IncomeExpense {
   net: number;
 }
 
+/** 记账口径：权责发生制（确认即收入）/ 收付实现制（实收才算收入）。 */
+export type AccountingBasis = 'accrual' | 'cash';
+
 /**
  * 收支汇总；可选按时间区间、按标签（如 'business' 得到小生意利润）过滤。
  * 收入账户 posting 在有符号约定下为负，这里翻正后返回。
+ *
+ * 记账口径（basis，仅影响收入侧）：
+ * - 'accrual'（默认）：本期收入 = 确认的营业收入（赊销在完成订单时即计）。
+ * - 'cash'：本期收入 = 实收 = 权责确认 − 本期应收净增(ΔAR)。恒等式来历：
+ *   ΔAR = 赊销 − 回款；直收 ΔAR=0 两口径相同；赊销当期 AR 增、抵消不计；回款 AR 减、计入；
+ *   预收 AR 负、即时计入。底层分录不变，纯报表层换聚合。
+ *   需调用方传入应收账款科目 id 集合（命名约定活在 web 层，core 保持纯）。
  */
 export function incomeExpense(
   txns: Transaction[],
   accounts: Account[],
-  opts: { period?: Period; tag?: string } = {},
+  opts: { period?: Period; tag?: string; basis?: AccountingBasis; receivableAccountIds?: Iterable<string> } = {},
 ): IncomeExpense {
   const typeOf = new Map(accounts.map((a) => [a.id, a.type] as const));
+  const arSet = opts.basis === 'cash' ? new Set(opts.receivableAccountIds ?? []) : null;
   let incomeSum = 0;
   let expenseSum = 0;
+  let arDelta = 0;
   for (const t of txns) {
     if (!inPeriod(t.date, opts.period)) continue;
     if (opts.tag && !t.tags.includes(opts.tag)) continue;
@@ -65,9 +77,10 @@ export function incomeExpense(
       const ty = typeOf.get(p.accountId);
       if (ty === 'income') incomeSum += p.amount;
       else if (ty === 'expense') expenseSum += p.amount;
+      if (arSet?.has(p.accountId)) arDelta += p.amount;
     }
   }
-  const income = -incomeSum;
+  const income = -incomeSum - arDelta;
   const expense = expenseSum;
   return { income, expense, net: income - expense };
 }

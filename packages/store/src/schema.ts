@@ -6,6 +6,7 @@ import type {
   StoredCustomer,
   StoredOrder,
   StoredProduct,
+  StoredSetting,
   StoredSettlement,
   StoredTransaction,
 } from './types';
@@ -124,6 +125,12 @@ export interface SettlementRow {
   created_at: string;
   updated_at: string;
   deleted: number;
+}
+export interface SettingRow {
+  scope: string;
+  key: string;
+  value: string;
+  updated_at: string;
 }
 
 /** 把数组按 size 切片，避免 `IN (?,?,…)` 占位符超过 SQLite 变量上限（旧版 999/新版 32766）。 */
@@ -254,6 +261,10 @@ export function toSettlement(r: SettlementRow): StoredSettlement {
     updatedAt: r.updated_at,
     deleted: r.deleted !== 0,
   };
+}
+
+export function toSetting(r: SettingRow): StoredSetting {
+  return { scope: r.scope, key: r.key, value: r.value, updatedAt: r.updated_at };
 }
 
 export function toTxn(r: TxnRow, postings: Posting[]): StoredTransaction {

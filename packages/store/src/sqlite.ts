@@ -16,6 +16,7 @@ import type {
   StoredCustomer,
   StoredOrder,
   StoredProduct,
+  StoredSetting,
   StoredSettlement,
   StoredTransaction,
   TxnQuery,
@@ -31,6 +32,7 @@ import {
   toOrderLine,
   toPosting,
   toProduct,
+  toSetting,
   toSettlement,
   toTxn,
 } from './schema';
@@ -43,6 +45,7 @@ import type {
   OrderRow,
   PostingRow,
   ProductRow,
+  SettingRow,
   SettlementRow,
   TxnRow,
 } from './schema';
@@ -639,5 +642,33 @@ export class SqliteRepository implements Repository {
       .prepare(`UPDATE products SET name=?, cost_price=?, sale_price=?, is_stock=?, unit=?, archived=?, updated_at=? WHERE id=?`)
       .run(next.name, next.costPrice, next.salePrice, next.isStock ? 1 : 0, next.unit, next.archived ? 1 : 0, next.updatedAt, id);
     return (await this.getProduct(id))!;
+  }
+
+  // ---- 设置（KV）----
+  async getSetting(scope: string, key: string): Promise<StoredSetting | null> {
+    const r = this.db
+      .prepare('SELECT * FROM settings WHERE scope = ? AND key = ?')
+      .get(scope, key) as SettingRow | undefined;
+    return r ? toSetting(r) : null;
+  }
+
+  async setSetting(scope: string, key: string, value: string): Promise<StoredSetting> {
+    const ts = this.now();
+    this.db
+      .prepare(
+        `INSERT INTO settings (scope, key, value, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      )
+      .run(scope, key, value, ts);
+    return (await this.getSetting(scope, key))!;
+  }
+
+  async listSettings(scope?: string): Promise<StoredSetting[]> {
+    const rows = (
+      scope === undefined
+        ? this.db.prepare('SELECT * FROM settings').all()
+        : this.db.prepare('SELECT * FROM settings WHERE scope = ?').all(scope)
+    ) as unknown as SettingRow[];
+    return rows.map(toSetting);
   }
 }

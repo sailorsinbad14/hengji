@@ -1,17 +1,21 @@
 import { incomeExpense, netWorth } from '@app/core';
-import type { StoredAccount, StoredBook, StoredTransaction } from '@app/store';
+import type { StoredAccount, StoredBook, StoredSetting, StoredTransaction } from '@app/store';
 import { BOOK_META } from '../db';
+import { receivableAccountIds } from '../biz';
+import { basisOf } from '../settings';
 import { currentMonth, fmtMoney } from '../format';
 
 export default function OverviewAll({
   books,
   accounts,
   txns,
+  settings,
   onOpen,
 }: {
   books: StoredBook[];
   accounts: StoredAccount[];
   txns: StoredTransaction[];
+  settings: StoredSetting[];
   onOpen: (id: string) => void;
 }) {
   const month = currentMonth();
@@ -22,14 +26,20 @@ export default function OverviewAll({
   const va = accounts.filter((x) => visible.has(x.bookId));
   const vt = txns.filter((x) => visible.has(x.bookId));
   const totalNw = netWorth(vt, va);
-  const totalIe = incomeExpense(vt, va, { period });
 
+  // 各账本按自身记账口径算收支，再求和——与各账本 Dashboard 数字一致（避免同一生意账本两处打架）。
   const perBook = books.map((b) => {
     const a = accounts.filter((x) => x.bookId === b.id);
     const t = txns.filter((x) => x.bookId === b.id);
-    const ie = incomeExpense(t, a, { period });
-    return { book: b, nw: netWorth(t, a), net: ie.net, txCount: t.length };
+    const basis = basisOf(settings, b.id);
+    const arIds = basis === 'cash' ? receivableAccountIds(a) : undefined;
+    const ie = incomeExpense(t, a, { period, basis, receivableAccountIds: arIds });
+    return { book: b, nw: netWorth(t, a), ie, txCount: t.length };
   });
+  const totalIe = perBook.reduce(
+    (s, x) => ({ income: s.income + x.ie.income, expense: s.expense + x.ie.expense, net: s.net + x.ie.net }),
+    { income: 0, expense: 0, net: 0 },
+  );
 
   return (
     <>
@@ -56,7 +66,7 @@ export default function OverviewAll({
         </div>
       </div>
       <div className="bookcards">
-        {perBook.map(({ book, nw, net, txCount }) => (
+        {perBook.map(({ book, nw, ie, txCount }) => (
           <button className="bookcard" key={book.id} onClick={() => onOpen(book.id)}>
             <div className="bc-head">
               {BOOK_META[book.type].emoji} {book.name}
@@ -64,8 +74,8 @@ export default function OverviewAll({
             </div>
             <div className="bc-nw">{fmtMoney(nw)}</div>
             <div className="bc-sub">
-              本月{book.type === 'business' ? '利润' : '结余'} {net >= 0 ? '+' : ''}
-              {fmtMoney(net)} · {txCount} 笔
+              本月{book.type === 'business' ? '利润' : '结余'} {ie.net >= 0 ? '+' : ''}
+              {fmtMoney(ie.net)} · {txCount} 笔
             </div>
           </button>
         ))}

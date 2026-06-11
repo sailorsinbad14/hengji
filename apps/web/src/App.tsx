@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { accountBalance } from '@app/core';
 import type { BookType } from '@app/core';
-import type { Repository, StoredAccount, StoredBook, StoredBudget, StoredTransaction } from '@app/store';
+import type { Repository, StoredAccount, StoredBook, StoredBudget, StoredSetting, StoredTransaction } from '@app/store';
 import { BOOK_META, createBookWithChart, isDesktop, ready } from './db';
 import { fmtMoney } from './format';
 import OverviewAll from './views/OverviewAll';
@@ -13,8 +13,9 @@ import Accounts from './views/Accounts';
 import Customers from './views/Customers';
 import Orders from './views/Orders';
 import Products from './views/Products';
+import Settings from './views/Settings';
 
-type View = 'dashboard' | 'txns' | 'budgets' | 'invest' | 'accounts' | 'customers' | 'orders' | 'products';
+type View = 'dashboard' | 'txns' | 'budgets' | 'invest' | 'accounts' | 'customers' | 'orders' | 'products' | 'settings';
 
 export interface AppData {
   repo: Repository;
@@ -24,6 +25,8 @@ export interface AppData {
   accounts: StoredAccount[];
   txns: StoredTransaction[];
   budgets: StoredBudget[];
+  /** 当前账本作用域内的设置（KV） */
+  settings: StoredSetting[];
   reload: () => Promise<void>;
 }
 
@@ -33,6 +36,7 @@ const TABS: Record<BookType, Array<[View, string]>> = {
     ['txns', '流水'],
     ['budgets', '预算'],
     ['accounts', '账户'],
+    ['settings', '设置'],
   ],
   business: [
     ['dashboard', '总览'],
@@ -42,11 +46,13 @@ const TABS: Record<BookType, Array<[View, string]>> = {
     ['txns', '流水'],
     ['budgets', '预算'],
     ['accounts', '账户'],
+    ['settings', '设置'],
   ],
   investment: [
     ['invest', '投资'],
     ['txns', '流水'],
     ['accounts', '账户'],
+    ['settings', '设置'],
   ],
 };
 
@@ -56,6 +62,7 @@ export default function App() {
   const [accounts, setAccounts] = useState<StoredAccount[]>([]);
   const [txns, setTxns] = useState<StoredTransaction[]>([]);
   const [budgets, setBudgets] = useState<StoredBudget[]>([]);
+  const [settings, setSettings] = useState<StoredSetting[]>([]);
   const [cur, setCur] = useState<'all' | string>('all');
   const [view, setView] = useState<View>('dashboard');
   const [creating, setCreating] = useState(false);
@@ -63,11 +70,18 @@ export default function App() {
   const [nbType, setNbType] = useState<BookType>('personal');
 
   async function loadFrom(r: Repository): Promise<void> {
-    const [bk, a, t, b] = await Promise.all([r.listBooks(), r.listAccounts(), r.listTransactions(), r.listBudgets()]);
+    const [bk, a, t, b, s] = await Promise.all([
+      r.listBooks(),
+      r.listAccounts(),
+      r.listTransactions(),
+      r.listBudgets(),
+      r.listSettings(),
+    ]);
     setBooks(bk);
     setAccounts(a);
     setTxns(t);
     setBudgets(b);
+    setSettings(s);
   }
 
   useEffect(() => {
@@ -83,8 +97,9 @@ export default function App() {
       accounts: accounts.filter((a) => a.bookId === cur),
       txns: txns.filter((t) => t.bookId === cur),
       budgets: budgets.filter((b) => b.bookId === cur),
+      settings: settings.filter((s) => s.scope === cur),
     }),
-    [accounts, txns, budgets, cur],
+    [accounts, txns, budgets, settings, cur],
   );
 
   if (!repo) return <div className="splash">账本加载中…</div>;
@@ -191,7 +206,7 @@ export default function App() {
       </aside>
       <main className="main">
         {cur === 'all' || !data ? (
-          <OverviewAll books={books} accounts={accounts} txns={txns} onOpen={openBook} />
+          <OverviewAll books={books} accounts={accounts} txns={txns} settings={settings} onOpen={openBook} />
         ) : (
           <>
             <div className="book-head">
@@ -214,6 +229,7 @@ export default function App() {
             {view === 'customers' && <Customers data={data} />}
             {view === 'orders' && <Orders data={data} />}
             {view === 'products' && <Products data={data} />}
+            {view === 'settings' && <Settings data={data} />}
           </>
         )}
       </main>

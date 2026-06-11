@@ -17,6 +17,18 @@ export type StoredOrder = Order & SyncMeta;
 export type StoredSettlement = Settlement & SyncMeta;
 export type StoredProduct = Product & SyncMeta;
 
+/**
+ * 通用设置项（KV）。scope = 'app' 为应用级，或某账本 id 为账本级。
+ * value 为字符串，语义由读取方解释（枚举直接存字面值、复杂值存 JSON）。
+ * 记账口径/对账周期/多币种汇率表等共用此表，避免逐功能建表。
+ */
+export interface StoredSetting {
+  scope: string;
+  key: string;
+  value: string;
+  updatedAt: string;
+}
+
 /** 时钟注入：返回 ISO 时间戳；默认实现用 Date，测试注入确定性时钟。 */
 export type Clock = () => string;
 
@@ -126,4 +138,9 @@ export interface Repository {
   getProduct(id: string): Promise<StoredProduct | null>;
   listProducts(opts?: { bookId?: string; includeArchived?: boolean }): Promise<StoredProduct[]>;
   updateProduct(id: string, patch: ProductPatch): Promise<StoredProduct>;
+
+  // 通用设置（KV）：scope='app' 或账本 id。setSetting 为 upsert（同 scope+key 覆盖）。
+  getSetting(scope: string, key: string): Promise<StoredSetting | null>;
+  setSetting(scope: string, key: string, value: string): Promise<StoredSetting>;
+  listSettings(scope?: string): Promise<StoredSetting[]>;
 }

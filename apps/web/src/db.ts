@@ -1,4 +1,4 @@
-import { adjustBalanceEntry, defaultChartFor, expandEntry, toMinor } from '@app/core';
+import { adjustBalanceEntry, defaultChartFor, expandEntry, orderRevenueEntry, orderTotal, toMinor } from '@app/core';
 import type { Account, Book, BookType, EntryInput } from '@app/core';
 import { InMemoryRepository } from '@app/store';
 import type { Repository } from '@app/store';
@@ -117,6 +117,21 @@ async function bootstrapDemo(): Promise<Repository> {
   for (const e of bizEntries) await repo.addTransaction(expandEntry(e, genId));
   await repo.addProduct({ id: genId(), bookId: biz.book.id, name: 'A型工具', costPrice: toMinor(80), salePrice: toMinor(125), isStock: true, unit: '个', archived: false });
   await repo.addProduct({ id: genId(), bookId: biz.book.id, name: 'B型配件', costPrice: toMinor(20), salePrice: toMinor(50), isStock: true, unit: '个', archived: false });
+  // 一笔已完成但未收款的赊销——让「记账口径」切换在演示版可见：
+  // 权责发生制本月收入含这 ¥1250，收付实现制不含（钱还没到账）。
+  const custId = genId();
+  await repo.addCustomer({ id: custId, bookId: biz.book.id, name: '老客户', phone: '', note: '', dueDays: 30, archived: false });
+  const arSubId = genId();
+  await repo.addAccount({ id: arSubId, bookId: biz.book.id, name: '应收账款/老客户', type: 'asset', parentId: biz.byName('应收账款'), currency: 'CNY', archived: false });
+  const orderId = genId();
+  const lines = [{ id: genId(), orderId, name: 'A型工具', qty: 10, unitPrice: toMinor(125), productId: null }];
+  await repo.addOrder({ id: orderId, bookId: biz.book.id, customerId: custId, date: daysAgo(2), status: 'pending_ship', note: '赊销一批', revenueTxnId: null, lines });
+  const rev = orderRevenueEntry(
+    { bookId: biz.book.id, date: daysAgo(2), amount: orderTotal(lines), receivableAccountId: arSubId, revenueAccountId: biz.byName('营业收入'), payee: '老客户', note: '赊销一批' },
+    genId,
+  );
+  await repo.addTransaction(rev);
+  await repo.updateOrder(orderId, { status: 'completed', revenueTxnId: rev.id });
 
   // —— 投资组合（投资）
   const inv = await createBookWithChart(repo, '投资组合', 'investment');
