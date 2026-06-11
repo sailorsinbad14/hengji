@@ -1,6 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { budgetUsage, expandEntry, incomeExpense, netWorth } from '@app/core';
-import type { Account, Book, EntryInput, Transaction } from '@app/core';
+import {
+  accountBalance,
+  budgetUsage,
+  collectionEntry,
+  expandEntry,
+  incomeExpense,
+  netWorth,
+  orderRevenueEntry,
+  orderTotal,
+} from '@app/core';
+import type { Account, Book, EntryInput, Order, Transaction } from '@app/core';
 import type { Clock, Repository } from '../src/index';
 
 export function fakeClock(): Clock {
@@ -40,6 +49,7 @@ export const accounts: Account[] = [
   acc('salary', B1, '工资', 'income'),
   // 第二账本（生意）
   acc('b2bank', B2, '对公账户', 'asset'),
+  acc('b2ar', B2, '应收账款', 'asset'),
   acc('b2sales', B2, '营业收入', 'income'),
   acc('b2supply', B2, '进货成本', 'expense'),
 ];
@@ -257,6 +267,131 @@ export function runRepositoryContract(name: string, makeRepo: (now: Clock) => Re
         remaining: -30000,
         over: true,
       });
+    });
+  });
+
+  describe(`${name} · 生意（客户/订单/收款）`, () => {
+    const cust = (id: string, bookId: string, name: string, dueDays = 0, archived = false) => ({
+      id,
+      bookId,
+      name,
+      phone: '',
+      note: '',
+      dueDays,
+      archived,
+    });
+
+    it('客户 add/get + 账本校验 + bookId/归档过滤 + update', async () => {
+      const repo = await seed(makeRepo(fakeClock()));
+      const c = await repo.addCustomer(cust('cu1', B2, '张三', 30));
+      expect(c.deleted).toBe(false);
+      expect((await repo.getCustomer('cu1'))!.dueDays).toBe(30);
+      await expect(repo.addCustomer(cust('cuX', 'ghost', '幽灵'))).rejects.toThrow();
+      await repo.addCustomer(cust('cu2', B2, '李四'));
+      expect((await repo.listCustomers({ bookId: B2 })).map((x) => x.id).sort()).toEqual(['cu1', 'cu2']);
+      await repo.updateCustomer('cu2', { archived: true });
+      expect((await repo.listCustomers({ bookId: B2 })).map((x) => x.id)).toEqual(['cu1']);
+      expect((await repo.listCustomers({ bookId: B2, includeArchived: true })).length).toBe(2);
+      await expect(repo.updateCustomer('nope', { name: 'x' })).rejects.toThrow();
+    });
+
+    it('订单 add（行往返）+ 同账本客户校验 + list 过滤 + updateOrder 状态', async () => {
+      const repo = await seed(makeRepo(fakeClock()));
+      await repo.addCustomer(cust('cu1', B2, '张三'));
+      const order: Order = {
+        id: 'o1',
+        bookId: B2,
+        customerId: 'cu1',
+        date: '2026-06-10',
+        status: 'pending_ship',
+        note: '',
+        revenueTxnId: null,
+        lines: [
+          { id: 'l1', orderId: 'o1', name: 'A货', qty: 2, unitPrice: 120000 },
+          { id: 'l2', orderId: 'o1', name: 'B货', qty: 1, unitPrice: 50000 },
+        ],
+      };
+      const stored = await repo.addOrder(order);
+      expect(stored.lines.length).toBe(2);
+      expect((await repo.getOrder('o1'))!.lines.map((l) => l.name)).toEqual(['A货', 'B货']);
+      expect(orderTotal(stored.lines)).toBe(290000);
+      await expect(repo.addOrder({ ...order, id: 'o2', customerId: 'ghost' })).rejects.toThrow();
+      expect((await repo.listOrders({ bookId: B2 })).map((o) => o.id)).toEqual(['o1']);
+      expect((await repo.listOrders({ customerId: 'cu1' })).length).toBe(1);
+      expect((await repo.listOrders({ status: 'completed' })).length).toBe(0);
+      const done = await repo.updateOrder('o1', { status: 'completed', revenueTxnId: 'tx-rev' });
+      expect(done.status).toBe('completed');
+      expect(done.revenueTxnId).toBe('tx-rev');
+      expect(done.lines.length).toBe(2); // 改状态不丢行
+      expect((await repo.listOrders({ status: 'completed' })).length).toBe(1);
+      await expect(repo.updateOrder('nope', { status: 'cancelled' })).rejects.toThrow();
+    });
+
+    it('收款 add（订单/客户同账本校验）+ list 过滤；与 core 聚合出应收余额', async () => {
+      const repo = await seed(makeRepo(fakeClock()));
+      await repo.addCustomer(cust('cu1', B2, '张三'));
+      const gen = counter('biz');
+      const order: Order = {
+        id: 'o1',
+        bookId: B2,
+        customerId: 'cu1',
+        date: '2026-06-10',
+        status: 'pending_ship',
+        note: '',
+        revenueTxnId: null,
+        lines: [{ id: 'l1', orderId: 'o1', name: 'A货', qty: 1, unitPrice: 250000 }],
+      };
+      await repo.addOrder(order);
+      // 完成 → 确认收入：借 应收(b2ar) 贷 营业收入(b2sales)
+      const rev = orderRevenueEntry(
+        { bookId: B2, date: '2026-06-10', amount: orderTotal(order.lines), receivableAccountId: 'b2ar', revenueAccountId: 'b2sales' },
+        gen,
+      );
+      await repo.addTransaction(rev);
+      await repo.updateOrder('o1', { status: 'completed', revenueTxnId: rev.id });
+      // 收款 ¥1000：钱从应收转入对公账户
+      const collect = collectionEntry(
+        { bookId: B2, date: '2026-06-11', amount: 100000, receivableAccountId: 'b2ar', assetAccountId: 'b2bank' },
+        gen,
+      );
+      await repo.addTransaction(collect);
+      const s = await repo.addSettlement({
+        id: 's1',
+        bookId: B2,
+        direction: 'in',
+        counterpartyType: 'customer',
+        counterpartyId: 'cu1',
+        orderId: 'o1',
+        amount: 100000,
+        date: '2026-06-11',
+        method: 'bank',
+        accountId: 'b2bank',
+        note: '',
+        txnId: collect.id,
+      });
+      expect(s.deleted).toBe(false);
+      // 跨账本收款（B1 收款引用 B2 客户）被拒
+      await expect(
+        repo.addSettlement({
+          id: 's2',
+          bookId: B1,
+          direction: 'in',
+          counterpartyType: 'customer',
+          counterpartyId: 'cu1',
+          orderId: null,
+          amount: 1,
+          date: '2026-06-11',
+          method: 'cash',
+          accountId: 'bank',
+          note: '',
+          txnId: null,
+        }),
+      ).rejects.toThrow(/同账本/);
+      expect((await repo.listSettlements({ orderId: 'o1' })).map((x) => x.id)).toEqual(['s1']);
+      expect((await repo.listSettlements({ counterpartyId: 'cu1' })).length).toBe(1);
+      // 应收余额 = 250000 - 100000 = 150000（从分录聚合）
+      const t2 = await repo.listTransactions({ bookId: B2 });
+      expect(accountBalance(t2, 'b2ar')).toBe(150000);
     });
   });
 }

@@ -24,6 +24,7 @@ describe('defaultChartFor', () => {
     expect(names).toContain('营业收入');
     expect(names).toContain('进货成本');
     expect(names).toContain('运费杂费');
+    expect(acc.find((a) => a.name === '应收账款')!.type).toBe('asset');
     expect(acc.every((a) => a.bookId === 'bk2')).toBe(true);
   });
 

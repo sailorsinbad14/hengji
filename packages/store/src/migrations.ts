@@ -5,6 +5,7 @@
  *   CREATE IF NOT EXISTS，幂等跳过。
  * - m2：多账本（books 表 + 全表 book_id 列）；遗留数据自动回填到固定 id 'default'
  *   的「我的账本」（personal）。空库不产生账本（由应用首启创建）。
+ * - m3：生意 B 期（customers/orders/order_lines/settlements）；纯新增表，不动既有数据。
  */
 
 export interface SqlRunner {
@@ -86,7 +87,68 @@ const M2: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_budgets_book ON budgets(book_id)`,
 ];
 
-export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2];
+// m3：生意系统 B 期（customers / orders / order_lines / settlements）。纯新增表，
+// 不触碰既有数据；个人/投资账本不产生这些表的行。
+const M3: string[] = [
+  `CREATE TABLE IF NOT EXISTS customers (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    due_days INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE TABLE IF NOT EXISTS orders (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL,
+    customer_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    status TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    revenue_txn_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE TABLE IF NOT EXISTS order_lines (
+    id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    qty REAL NOT NULL,
+    unit_price INTEGER NOT NULL,
+    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE
+  )`,
+  `CREATE TABLE IF NOT EXISTS settlements (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    counterparty_type TEXT NOT NULL,
+    counterparty_id TEXT NOT NULL,
+    order_id TEXT,
+    amount INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    method TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    txn_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_customers_book ON customers(book_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_orders_book ON orders(book_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_order_lines_order ON order_lines(order_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_settlements_book ON settlements(book_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_settlements_order ON settlements(order_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_settlements_counterparty ON settlements(counterparty_id)`,
+];
+
+export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3];
 
 export async function migrate(r: SqlRunner): Promise<void> {
   const v = await r.getVersion();

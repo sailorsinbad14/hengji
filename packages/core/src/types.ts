@@ -67,3 +67,72 @@ export interface Budget {
   /** 每月限额（minor units） */
   monthlyLimit: number;
 }
+
+/**
+ * 生意系统（v0.2 B 期）：客户 / 订单 / 收款。
+ * 业务单据是操作层，财务动作（订单完成确认收入、收款核销）自动生成平衡分录进复式内核，
+ * 报表/应收余额从分录聚合——不另立平行账。见 ARCHITECTURE.md「多账本与生意系统」。
+ */
+
+export interface Customer {
+  id: string;
+  bookId: string;
+  name: string;
+  phone: string;
+  note: string;
+  /** 默认账期天数；到期日 = 订单日期 + dueDays。0 = 货到付款/即时 */
+  dueDays: number;
+  archived: boolean;
+}
+
+/** 待采购 / 待发货 / 已发货 / 已完成 / 已取消。B 期仅用 待发货→已完成/已取消；其余留 C 期代采。 */
+export type OrderStatus = 'pending_purchase' | 'pending_ship' | 'shipped' | 'completed' | 'cancelled';
+
+export interface OrderLine {
+  id: string;
+  orderId: string;
+  /** 自由文本商品名（B 期；商品主数据留 C 期） */
+  name: string;
+  /** 数量（可含小数，如按重量计） */
+  qty: number;
+  /** 单价（最小单位/分） */
+  unitPrice: Minor;
+}
+
+export interface Order {
+  id: string;
+  bookId: string;
+  customerId: string;
+  /** 下单日期 YYYY-MM-DD */
+  date: string;
+  status: OrderStatus;
+  note: string;
+  /** 已完成时生成的收入确认分录 id；未完成为 null */
+  revenueTxnId: string | null;
+  lines: OrderLine[];
+}
+
+export type SettlementMethod = 'wechat' | 'alipay' | 'bank' | 'cash' | 'other';
+/** in = 收款（来自客户）；out = 付款（给供应商，C 期）。 */
+export type SettlementDirection = 'in' | 'out';
+export type CounterpartyType = 'customer' | 'supplier';
+
+export interface Settlement {
+  id: string;
+  bookId: string;
+  direction: SettlementDirection;
+  counterpartyType: CounterpartyType;
+  /** customerId（B 期）/ supplierId（C 期） */
+  counterpartyId: string;
+  /** 可选关联单据 */
+  orderId: string | null;
+  /** 正数最小单位 */
+  amount: Minor;
+  date: string;
+  method: SettlementMethod;
+  /** 收/付款使用的资产账户（微信商户/对公账户/现金…） */
+  accountId: string;
+  note: string;
+  /** 生成的核销分录 id */
+  txnId: string | null;
+}

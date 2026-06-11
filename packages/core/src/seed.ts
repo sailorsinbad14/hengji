@@ -26,6 +26,7 @@ const BUSINESS: ReadonlyArray<Def> = [
   { name: '微信商户', type: 'asset' },
   { name: '支付宝商户', type: 'asset' },
   { name: '现金', type: 'asset' },
+  { name: '应收账款', type: 'asset' },
   { name: '期初余额', type: 'equity' },
   { name: '营业收入', type: 'income' },
   { name: '其他收入', type: 'income' },

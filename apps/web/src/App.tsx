@@ -10,8 +10,10 @@ import Transactions from './views/Transactions';
 import Budgets from './views/Budgets';
 import Invest from './views/Invest';
 import Accounts from './views/Accounts';
+import Customers from './views/Customers';
+import Orders from './views/Orders';
 
-type View = 'dashboard' | 'txns' | 'budgets' | 'invest' | 'accounts';
+type View = 'dashboard' | 'txns' | 'budgets' | 'invest' | 'accounts' | 'customers' | 'orders';
 
 export interface AppData {
   repo: Repository;
@@ -33,6 +35,8 @@ const TABS: Record<BookType, Array<[View, string]>> = {
   ],
   business: [
     ['dashboard', '总览'],
+    ['orders', '订单'],
+    ['customers', '客户'],
     ['txns', '流水'],
     ['budgets', '预算'],
     ['accounts', '账户'],
@@ -195,7 +199,6 @@ export default function App() {
                     {label}
                   </button>
                 ))}
-                {data.book.type === 'business' && <span className="seg-soon">进销存 · B 期开发中</span>}
               </div>
               <button className="archive" onClick={() => void archiveBook()}>
                 归档账本
@@ -206,6 +209,8 @@ export default function App() {
             {view === 'budgets' && <Budgets data={data} />}
             {view === 'invest' && <Invest data={data} />}
             {view === 'accounts' && <Accounts data={data} />}
+            {view === 'customers' && <Customers data={data} />}
+            {view === 'orders' && <Orders data={data} />}
           </>
         )}
       </main>

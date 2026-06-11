@@ -1,4 +1,4 @@
-import type { Account, Book, Budget, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, Order, OrderStatus, Settlement, Transaction } from '@app/core';
 
 /** 每条记录都带的同步元数据，为将来的云同步预留。 */
 export interface SyncMeta {
@@ -12,6 +12,9 @@ export type StoredBook = Book & SyncMeta;
 export type StoredAccount = Account & SyncMeta;
 export type StoredTransaction = Transaction & SyncMeta;
 export type StoredBudget = Budget & SyncMeta;
+export type StoredCustomer = Customer & SyncMeta;
+export type StoredOrder = Order & SyncMeta;
+export type StoredSettlement = Settlement & SyncMeta;
 
 /** 时钟注入：返回 ISO 时间戳；默认实现用 Date，测试注入确定性时钟。 */
 export type Clock = () => string;
@@ -32,6 +35,21 @@ export interface AccountPatch {
 export interface BudgetPatch {
   accountId?: string;
   monthlyLimit?: number;
+}
+
+export interface CustomerPatch {
+  name?: string;
+  phone?: string;
+  note?: string;
+  dueDays?: number;
+  archived?: boolean;
+}
+
+/** B 期订单创建后行不可改（改 = 取消重建）；只允许改状态/备注/收入分录关联。 */
+export interface OrderPatch {
+  status?: OrderStatus;
+  note?: string;
+  revenueTxnId?: string | null;
 }
 
 export interface TxnQuery {
@@ -77,4 +95,20 @@ export interface Repository {
   listBudgets(query?: { bookId?: string }): Promise<StoredBudget[]>;
   updateBudget(id: string, patch: BudgetPatch): Promise<StoredBudget>;
   removeBudget(id: string): Promise<void>;
+
+  // 生意（v0.2 B 期）：客户 / 订单 / 收款。约束（实现负责校验）：
+  // - 客户/订单/收款必须挂在已存在的账本上；
+  // - 订单的客户、收款的客户/关联订单必须与单据同账本。
+  addCustomer(customer: Customer): Promise<StoredCustomer>;
+  getCustomer(id: string): Promise<StoredCustomer | null>;
+  listCustomers(opts?: { bookId?: string; includeArchived?: boolean }): Promise<StoredCustomer[]>;
+  updateCustomer(id: string, patch: CustomerPatch): Promise<StoredCustomer>;
+
+  addOrder(order: Order): Promise<StoredOrder>;
+  getOrder(id: string): Promise<StoredOrder | null>;
+  listOrders(query?: { bookId?: string; customerId?: string; status?: OrderStatus }): Promise<StoredOrder[]>;
+  updateOrder(id: string, patch: OrderPatch): Promise<StoredOrder>;
+
+  addSettlement(settlement: Settlement): Promise<StoredSettlement>;
+  listSettlements(query?: { bookId?: string; orderId?: string; counterpartyId?: string }): Promise<StoredSettlement[]>;
 }

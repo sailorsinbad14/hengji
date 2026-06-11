@@ -1,14 +1,19 @@
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, Order, OrderStatus, Settlement, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
   BudgetPatch,
   Clock,
+  CustomerPatch,
+  OrderPatch,
   Repository,
   StoredAccount,
   StoredBook,
   StoredBudget,
+  StoredCustomer,
+  StoredOrder,
+  StoredSettlement,
   StoredTransaction,
   TxnQuery,
 } from './types';
@@ -31,6 +36,9 @@ export class InMemoryRepository implements Repository {
   private readonly accounts = new Map<string, StoredAccount>();
   private readonly txns = new Map<string, StoredTransaction>();
   private readonly budgets = new Map<string, StoredBudget>();
+  private readonly customers = new Map<string, StoredCustomer>();
+  private readonly orders = new Map<string, StoredOrder>();
+  private readonly settlements = new Map<string, StoredSettlement>();
   private readonly now: Clock;
 
   constructor(opts: { now?: Clock } = {}) {
@@ -209,4 +217,129 @@ export class InMemoryRepository implements Repository {
     if (!b || b.deleted) throw new Error(`预算不存在：${id}`);
     this.budgets.set(id, { ...b, deleted: true, updatedAt: this.now() });
   }
+
+  // ---- 生意：客户 ----
+  private liveBook(bookId: string): StoredBook {
+    const b = this.books.get(bookId);
+    if (!b || b.deleted) throw new Error(`账本不存在：${bookId}`);
+    return b;
+  }
+
+  async addCustomer(customer: Customer): Promise<StoredCustomer> {
+    if (this.customers.has(customer.id)) throw new Error(`客户已存在：${customer.id}`);
+    this.liveBook(customer.bookId);
+    const ts = this.now();
+    const stored: StoredCustomer = { ...clone(customer), createdAt: ts, updatedAt: ts, deleted: false };
+    this.customers.set(customer.id, stored);
+    return clone(stored);
+  }
+
+  async getCustomer(id: string): Promise<StoredCustomer | null> {
+    const c = this.customers.get(id);
+    return c && !c.deleted ? clone(c) : null;
+  }
+
+  async listCustomers(opts: { bookId?: string; includeArchived?: boolean } = {}): Promise<StoredCustomer[]> {
+    const out: StoredCustomer[] = [];
+    for (const c of this.customers.values()) {
+      if (c.deleted) continue;
+      if (!opts.includeArchived && c.archived) continue;
+      if (opts.bookId && c.bookId !== opts.bookId) continue;
+      out.push(clone(c));
+    }
+    return out;
+  }
+
+  async updateCustomer(id: string, patch: CustomerPatch): Promise<StoredCustomer> {
+    const c = this.customers.get(id);
+    if (!c || c.deleted) throw new Error(`客户不存在：${id}`);
+    const updated: StoredCustomer = { ...c, ...patch, updatedAt: this.now() };
+    this.customers.set(id, updated);
+    return clone(updated);
+  }
+
+  // ---- 生意：订单 ----
+  private liveCustomer(id: string): StoredCustomer {
+    const c = this.customers.get(id);
+    if (!c || c.deleted) throw new Error(`客户不存在：${id}`);
+    return c;
+  }
+
+  async addOrder(order: Order): Promise<StoredOrder> {
+    if (this.orders.has(order.id)) throw new Error(`订单已存在：${order.id}`);
+    this.liveBook(order.bookId);
+    const cust = this.liveCustomer(order.customerId);
+    if (cust.bookId !== order.bookId) throw new Error('订单客户必须与订单同账本');
+    const ts = this.now();
+    const stored: StoredOrder = { ...clone(order), createdAt: ts, updatedAt: ts, deleted: false };
+    this.orders.set(order.id, stored);
+    return clone(stored);
+  }
+
+  async getOrder(id: string): Promise<StoredOrder | null> {
+    const o = this.orders.get(id);
+    return o && !o.deleted ? clone(o) : null;
+  }
+
+  async listOrders(query: { bookId?: string; customerId?: string; status?: OrderStatus } = {}): Promise<StoredOrder[]> {
+    const out: StoredOrder[] = [];
+    for (const o of this.orders.values()) {
+      if (o.deleted) continue;
+      if (query.bookId && o.bookId !== query.bookId) continue;
+      if (query.customerId && o.customerId !== query.customerId) continue;
+      if (query.status && o.status !== query.status) continue;
+      out.push(clone(o));
+    }
+    return sortByDateDesc(out);
+  }
+
+  async updateOrder(id: string, patch: OrderPatch): Promise<StoredOrder> {
+    const o = this.orders.get(id);
+    if (!o || o.deleted) throw new Error(`订单不存在：${id}`);
+    const updated: StoredOrder = { ...o, ...patch, updatedAt: this.now() };
+    this.orders.set(id, updated);
+    return clone(updated);
+  }
+
+  // ---- 生意：收款 ----
+  async addSettlement(settlement: Settlement): Promise<StoredSettlement> {
+    if (this.settlements.has(settlement.id)) throw new Error(`收款已存在：${settlement.id}`);
+    this.liveBook(settlement.bookId);
+    if (settlement.counterpartyType === 'customer') {
+      const cust = this.liveCustomer(settlement.counterpartyId);
+      if (cust.bookId !== settlement.bookId) throw new Error('收款客户必须与收款同账本');
+    }
+    if (settlement.orderId !== null) {
+      const o = this.orders.get(settlement.orderId);
+      if (!o || o.deleted) throw new Error(`关联订单不存在：${settlement.orderId}`);
+      if (o.bookId !== settlement.bookId) throw new Error('关联订单必须与收款同账本');
+    }
+    const ts = this.now();
+    const stored: StoredSettlement = { ...clone(settlement), createdAt: ts, updatedAt: ts, deleted: false };
+    this.settlements.set(settlement.id, stored);
+    return clone(stored);
+  }
+
+  async listSettlements(
+    query: { bookId?: string; orderId?: string; counterpartyId?: string } = {},
+  ): Promise<StoredSettlement[]> {
+    const out: StoredSettlement[] = [];
+    for (const s of this.settlements.values()) {
+      if (s.deleted) continue;
+      if (query.bookId && s.bookId !== query.bookId) continue;
+      if (query.orderId && s.orderId !== query.orderId) continue;
+      if (query.counterpartyId && s.counterpartyId !== query.counterpartyId) continue;
+      out.push(clone(s));
+    }
+    return sortByDateDesc(out);
+  }
+}
+
+/** 倒序：date DESC，再 createdAt DESC，再 id DESC——与 SQLite 实现一致、稳定。 */
+function sortByDateDesc<T extends { date: string; createdAt: string; id: string }>(arr: T[]): T[] {
+  return arr.sort((a, b) => {
+    if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+    if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+    return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+  });
 }

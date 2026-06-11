@@ -1,5 +1,13 @@
-import type { Account, Book, Posting } from '@app/core';
-import type { StoredAccount, StoredBook, StoredBudget, StoredTransaction } from './types';
+import type { Account, Book, OrderLine, Posting, SettlementDirection, SettlementMethod, CounterpartyType, OrderStatus } from '@app/core';
+import type {
+  StoredAccount,
+  StoredBook,
+  StoredBudget,
+  StoredCustomer,
+  StoredOrder,
+  StoredSettlement,
+  StoredTransaction,
+} from './types';
 
 /**
  * 行映射（浏览器安全，无驱动依赖）。
@@ -51,6 +59,54 @@ export interface BudgetRow {
   book_id: string;
   account_id: string;
   monthly_limit: number;
+  created_at: string;
+  updated_at: string;
+  deleted: number;
+}
+export interface CustomerRow {
+  id: string;
+  book_id: string;
+  name: string;
+  phone: string;
+  note: string;
+  due_days: number;
+  archived: number;
+  created_at: string;
+  updated_at: string;
+  deleted: number;
+}
+export interface OrderRow {
+  id: string;
+  book_id: string;
+  customer_id: string;
+  date: string;
+  status: string;
+  note: string;
+  revenue_txn_id: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted: number;
+}
+export interface OrderLineRow {
+  id: string;
+  order_id: string;
+  name: string;
+  qty: number;
+  unit_price: number;
+}
+export interface SettlementRow {
+  id: string;
+  book_id: string;
+  direction: string;
+  counterparty_type: string;
+  counterparty_id: string;
+  order_id: string | null;
+  amount: number;
+  date: string;
+  method: string;
+  account_id: string;
+  note: string;
+  txn_id: string | null;
   created_at: string;
   updated_at: string;
   deleted: number;
@@ -110,6 +166,61 @@ export function toBudget(r: BudgetRow): StoredBudget {
     bookId: r.book_id,
     accountId: r.account_id,
     monthlyLimit: r.monthly_limit,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deleted: r.deleted !== 0,
+  };
+}
+
+export function toCustomer(r: CustomerRow): StoredCustomer {
+  return {
+    id: r.id,
+    bookId: r.book_id,
+    name: r.name,
+    phone: r.phone,
+    note: r.note,
+    dueDays: r.due_days,
+    archived: r.archived !== 0,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deleted: r.deleted !== 0,
+  };
+}
+
+export function toOrderLine(r: OrderLineRow): OrderLine {
+  return { id: r.id, orderId: r.order_id, name: r.name, qty: r.qty, unitPrice: r.unit_price };
+}
+
+export function toOrder(r: OrderRow, lines: OrderLine[]): StoredOrder {
+  return {
+    id: r.id,
+    bookId: r.book_id,
+    customerId: r.customer_id,
+    date: r.date,
+    status: r.status as OrderStatus,
+    note: r.note,
+    revenueTxnId: r.revenue_txn_id,
+    lines,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deleted: r.deleted !== 0,
+  };
+}
+
+export function toSettlement(r: SettlementRow): StoredSettlement {
+  return {
+    id: r.id,
+    bookId: r.book_id,
+    direction: r.direction as SettlementDirection,
+    counterpartyType: r.counterparty_type as CounterpartyType,
+    counterpartyId: r.counterparty_id,
+    orderId: r.order_id,
+    amount: r.amount,
+    date: r.date,
+    method: r.method as SettlementMethod,
+    accountId: r.account_id,
+    note: r.note,
+    txnId: r.txn_id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     deleted: r.deleted !== 0,

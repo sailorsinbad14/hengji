@@ -1,20 +1,47 @@
 import Database from '@tauri-apps/plugin-sql';
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Posting, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, Order, OrderStatus, Posting, Settlement, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
   BudgetPatch,
   Clock,
+  CustomerPatch,
+  OrderPatch,
   Repository,
   StoredAccount,
   StoredBook,
   StoredBudget,
+  StoredCustomer,
+  StoredOrder,
+  StoredSettlement,
   StoredTransaction,
   TxnQuery,
 } from './types';
-import { chunk, parseTags, toAccount, toBook, toBudget, toPosting, toTxn } from './schema';
-import type { AccountRow, BookRow, BudgetRow, PostingRow, TxnRow } from './schema';
+import {
+  chunk,
+  parseTags,
+  toAccount,
+  toBook,
+  toBudget,
+  toCustomer,
+  toOrder,
+  toOrderLine,
+  toPosting,
+  toSettlement,
+  toTxn,
+} from './schema';
+import type {
+  AccountRow,
+  BookRow,
+  BudgetRow,
+  CustomerRow,
+  OrderLineRow,
+  OrderRow,
+  PostingRow,
+  SettlementRow,
+  TxnRow,
+} from './schema';
 import { migrate } from './migrations';
 
 const defaultClock: Clock = () => new Date().toISOString();
@@ -335,5 +362,222 @@ export class TauriSqlRepository implements Repository {
   private async getBudget(id: string): Promise<StoredBudget | null> {
     const rows = await this.db.select<BudgetRow[]>('SELECT * FROM budgets WHERE id = $1 AND deleted = 0', [id]);
     return rows[0] ? toBudget(rows[0]) : null;
+  }
+
+  // ---- 生意：客户 ----
+  private async assertBook(bookId: string): Promise<void> {
+    if (!(await this.exists('SELECT 1 FROM books WHERE id = $1 AND deleted = 0', [bookId]))) {
+      throw new Error(`账本不存在：${bookId}`);
+    }
+  }
+
+  async addCustomer(customer: Customer): Promise<StoredCustomer> {
+    if (await this.exists('SELECT 1 FROM customers WHERE id = $1', [customer.id])) {
+      throw new Error(`客户已存在：${customer.id}`);
+    }
+    await this.assertBook(customer.bookId);
+    const ts = this.now();
+    await this.db.execute(
+      `INSERT INTO customers (id, book_id, name, phone, note, due_days, archived, created_at, updated_at, deleted)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0)`,
+      [customer.id, customer.bookId, customer.name, customer.phone, customer.note, customer.dueDays, customer.archived ? 1 : 0, ts, ts],
+    );
+    return (await this.getCustomer(customer.id))!;
+  }
+
+  async getCustomer(id: string): Promise<StoredCustomer | null> {
+    const rows = await this.db.select<CustomerRow[]>('SELECT * FROM customers WHERE id = $1 AND deleted = 0', [id]);
+    return rows[0] ? toCustomer(rows[0]) : null;
+  }
+
+  async listCustomers(opts: { bookId?: string; includeArchived?: boolean } = {}): Promise<StoredCustomer[]> {
+    const cond = ['deleted = 0'];
+    const params: unknown[] = [];
+    if (!opts.includeArchived) cond.push('archived = 0');
+    if (opts.bookId) {
+      params.push(opts.bookId);
+      cond.push(`book_id = $${params.length}`);
+    }
+    const rows = await this.db.select<CustomerRow[]>(`SELECT * FROM customers WHERE ${cond.join(' AND ')}`, params);
+    return rows.map(toCustomer);
+  }
+
+  async updateCustomer(id: string, patch: CustomerPatch): Promise<StoredCustomer> {
+    const cur = await this.getCustomer(id);
+    if (!cur) throw new Error(`客户不存在：${id}`);
+    const next: StoredCustomer = { ...cur, ...patch, updatedAt: this.now() };
+    await this.db.execute(
+      'UPDATE customers SET name=$1, phone=$2, note=$3, due_days=$4, archived=$5, updated_at=$6 WHERE id=$7',
+      [next.name, next.phone, next.note, next.dueDays, next.archived ? 1 : 0, next.updatedAt, id],
+    );
+    return (await this.getCustomer(id))!;
+  }
+
+  // ---- 生意：订单 ----
+  private async customerBookId(id: string): Promise<string> {
+    const rows = await this.db.select<Array<{ book_id: string }>>(
+      'SELECT book_id FROM customers WHERE id = $1 AND deleted = 0',
+      [id],
+    );
+    if (!rows[0]) throw new Error(`客户不存在：${id}`);
+    return rows[0].book_id;
+  }
+
+  private async insertOrderLines(orderId: string, lines: Order['lines']): Promise<void> {
+    for (const l of lines) {
+      await this.db.execute('INSERT INTO order_lines (id, order_id, name, qty, unit_price) VALUES ($1, $2, $3, $4, $5)', [
+        l.id,
+        orderId,
+        l.name,
+        l.qty,
+        l.unitPrice,
+      ]);
+    }
+  }
+
+  async addOrder(order: Order): Promise<StoredOrder> {
+    if (await this.exists('SELECT 1 FROM orders WHERE id = $1', [order.id])) {
+      throw new Error(`订单已存在：${order.id}`);
+    }
+    await this.assertBook(order.bookId);
+    if ((await this.customerBookId(order.customerId)) !== order.bookId) throw new Error('订单客户必须与订单同账本');
+    const ts = this.now();
+    await this.db.execute(
+      `INSERT INTO orders (id, book_id, customer_id, date, status, note, revenue_txn_id, created_at, updated_at, deleted)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0)`,
+      [order.id, order.bookId, order.customerId, order.date, order.status, order.note, order.revenueTxnId, ts, ts],
+    );
+    await this.insertOrderLines(order.id, order.lines);
+    return (await this.getOrder(order.id))!;
+  }
+
+  async getOrder(id: string): Promise<StoredOrder | null> {
+    const rows = await this.db.select<OrderRow[]>('SELECT * FROM orders WHERE id = $1 AND deleted = 0', [id]);
+    const head = rows[0];
+    if (!head) return null;
+    const lineRows = await this.db.select<OrderLineRow[]>('SELECT * FROM order_lines WHERE order_id = $1', [id]);
+    return toOrder(head, lineRows.map(toOrderLine));
+  }
+
+  async listOrders(query: { bookId?: string; customerId?: string; status?: OrderStatus } = {}): Promise<StoredOrder[]> {
+    const cond = ['deleted = 0'];
+    const params: unknown[] = [];
+    if (query.bookId) {
+      params.push(query.bookId);
+      cond.push(`book_id = $${params.length}`);
+    }
+    if (query.customerId) {
+      params.push(query.customerId);
+      cond.push(`customer_id = $${params.length}`);
+    }
+    if (query.status) {
+      params.push(query.status);
+      cond.push(`status = $${params.length}`);
+    }
+    const rows = await this.db.select<OrderRow[]>(
+      `SELECT * FROM orders WHERE ${cond.join(' AND ')} ORDER BY date DESC, created_at DESC, id DESC`,
+      params,
+    );
+    if (rows.length === 0) return [];
+    const byOrder = new Map<string, OrderLineRow[]>();
+    for (const batch of chunk(rows.map((r) => r.id), 500)) {
+      const placeholders = batch.map((_, i) => `$${i + 1}`).join(', ');
+      const lineRows = await this.db.select<OrderLineRow[]>(
+        `SELECT * FROM order_lines WHERE order_id IN (${placeholders})`,
+        batch,
+      );
+      for (const lr of lineRows) {
+        const arr = byOrder.get(lr.order_id) ?? [];
+        arr.push(lr);
+        byOrder.set(lr.order_id, arr);
+      }
+    }
+    return rows.map((r) => toOrder(r, (byOrder.get(r.id) ?? []).map(toOrderLine)));
+  }
+
+  async updateOrder(id: string, patch: OrderPatch): Promise<StoredOrder> {
+    const cur = await this.getOrder(id);
+    if (!cur) throw new Error(`订单不存在：${id}`);
+    const next: StoredOrder = { ...cur, ...patch, updatedAt: this.now() };
+    await this.db.execute('UPDATE orders SET status=$1, note=$2, revenue_txn_id=$3, updated_at=$4 WHERE id=$5', [
+      next.status,
+      next.note,
+      next.revenueTxnId,
+      next.updatedAt,
+      id,
+    ]);
+    return (await this.getOrder(id))!;
+  }
+
+  // ---- 生意：收款 ----
+  async addSettlement(settlement: Settlement): Promise<StoredSettlement> {
+    if (await this.exists('SELECT 1 FROM settlements WHERE id = $1', [settlement.id])) {
+      throw new Error(`收款已存在：${settlement.id}`);
+    }
+    await this.assertBook(settlement.bookId);
+    if (settlement.counterpartyType === 'customer') {
+      if ((await this.customerBookId(settlement.counterpartyId)) !== settlement.bookId) {
+        throw new Error('收款客户必须与收款同账本');
+      }
+    }
+    if (settlement.orderId !== null) {
+      const rows = await this.db.select<Array<{ book_id: string }>>(
+        'SELECT book_id FROM orders WHERE id = $1 AND deleted = 0',
+        [settlement.orderId],
+      );
+      if (!rows[0]) throw new Error(`关联订单不存在：${settlement.orderId}`);
+      if (rows[0].book_id !== settlement.bookId) throw new Error('关联订单必须与收款同账本');
+    }
+    const ts = this.now();
+    await this.db.execute(
+      `INSERT INTO settlements (id, book_id, direction, counterparty_type, counterparty_id, order_id, amount, date, method, account_id, note, txn_id, created_at, updated_at, deleted)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0)`,
+      [
+        settlement.id,
+        settlement.bookId,
+        settlement.direction,
+        settlement.counterpartyType,
+        settlement.counterpartyId,
+        settlement.orderId,
+        settlement.amount,
+        settlement.date,
+        settlement.method,
+        settlement.accountId,
+        settlement.note,
+        settlement.txnId,
+        ts,
+        ts,
+      ],
+    );
+    return (await this.getSettlement(settlement.id))!;
+  }
+
+  private async getSettlement(id: string): Promise<StoredSettlement | null> {
+    const rows = await this.db.select<SettlementRow[]>('SELECT * FROM settlements WHERE id = $1 AND deleted = 0', [id]);
+    return rows[0] ? toSettlement(rows[0]) : null;
+  }
+
+  async listSettlements(
+    query: { bookId?: string; orderId?: string; counterpartyId?: string } = {},
+  ): Promise<StoredSettlement[]> {
+    const cond = ['deleted = 0'];
+    const params: unknown[] = [];
+    if (query.bookId) {
+      params.push(query.bookId);
+      cond.push(`book_id = $${params.length}`);
+    }
+    if (query.orderId) {
+      params.push(query.orderId);
+      cond.push(`order_id = $${params.length}`);
+    }
+    if (query.counterpartyId) {
+      params.push(query.counterpartyId);
+      cond.push(`counterparty_id = $${params.length}`);
+    }
+    const rows = await this.db.select<SettlementRow[]>(
+      `SELECT * FROM settlements WHERE ${cond.join(' AND ')} ORDER BY date DESC, created_at DESC, id DESC`,
+      params,
+    );
+    return rows.map(toSettlement);
   }
 }

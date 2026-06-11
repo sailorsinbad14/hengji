@@ -1,20 +1,47 @@
 import { DatabaseSync } from 'node:sqlite';
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Posting, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, Order, OrderStatus, Posting, Settlement, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
   BudgetPatch,
   Clock,
+  CustomerPatch,
+  OrderPatch,
   Repository,
   StoredAccount,
   StoredBook,
   StoredBudget,
+  StoredCustomer,
+  StoredOrder,
+  StoredSettlement,
   StoredTransaction,
   TxnQuery,
 } from './types';
-import { chunk, parseTags, toAccount, toBook, toBudget, toPosting, toTxn } from './schema';
-import type { AccountRow, BookRow, BudgetRow, PostingRow, TxnRow } from './schema';
+import {
+  chunk,
+  parseTags,
+  toAccount,
+  toBook,
+  toBudget,
+  toCustomer,
+  toOrder,
+  toOrderLine,
+  toPosting,
+  toSettlement,
+  toTxn,
+} from './schema';
+import type {
+  AccountRow,
+  BookRow,
+  BudgetRow,
+  CustomerRow,
+  OrderLineRow,
+  OrderRow,
+  PostingRow,
+  SettlementRow,
+  TxnRow,
+} from './schema';
 import { migrateSync } from './migrations';
 
 const defaultClock: Clock = () => new Date().toISOString();
@@ -329,5 +356,229 @@ export class SqliteRepository implements Repository {
   private async getBudget(id: string): Promise<StoredBudget | null> {
     const r = this.db.prepare('SELECT * FROM budgets WHERE id = ? AND deleted = 0').get(id) as BudgetRow | undefined;
     return r ? toBudget(r) : null;
+  }
+
+  // ---- 生意：客户 ----
+  private assertBook(bookId: string): void {
+    if (!this.db.prepare('SELECT 1 FROM books WHERE id = ? AND deleted = 0').get(bookId)) {
+      throw new Error(`账本不存在：${bookId}`);
+    }
+  }
+
+  async addCustomer(customer: Customer): Promise<StoredCustomer> {
+    if (this.db.prepare('SELECT 1 FROM customers WHERE id = ?').get(customer.id)) {
+      throw new Error(`客户已存在：${customer.id}`);
+    }
+    this.assertBook(customer.bookId);
+    const ts = this.now();
+    this.db
+      .prepare(
+        `INSERT INTO customers (id, book_id, name, phone, note, due_days, archived, created_at, updated_at, deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      )
+      .run(
+        customer.id,
+        customer.bookId,
+        customer.name,
+        customer.phone,
+        customer.note,
+        customer.dueDays,
+        customer.archived ? 1 : 0,
+        ts,
+        ts,
+      );
+    return (await this.getCustomer(customer.id))!;
+  }
+
+  async getCustomer(id: string): Promise<StoredCustomer | null> {
+    const r = this.db.prepare('SELECT * FROM customers WHERE id = ? AND deleted = 0').get(id) as
+      | CustomerRow
+      | undefined;
+    return r ? toCustomer(r) : null;
+  }
+
+  async listCustomers(opts: { bookId?: string; includeArchived?: boolean } = {}): Promise<StoredCustomer[]> {
+    const cond = ['deleted = 0'];
+    const params: string[] = [];
+    if (!opts.includeArchived) cond.push('archived = 0');
+    if (opts.bookId) {
+      cond.push('book_id = ?');
+      params.push(opts.bookId);
+    }
+    const rows = this.db
+      .prepare(`SELECT * FROM customers WHERE ${cond.join(' AND ')}`)
+      .all(...params) as unknown as CustomerRow[];
+    return rows.map(toCustomer);
+  }
+
+  async updateCustomer(id: string, patch: CustomerPatch): Promise<StoredCustomer> {
+    const cur = await this.getCustomer(id);
+    if (!cur) throw new Error(`客户不存在：${id}`);
+    const next: StoredCustomer = { ...cur, ...patch, updatedAt: this.now() };
+    this.db
+      .prepare(`UPDATE customers SET name=?, phone=?, note=?, due_days=?, archived=?, updated_at=? WHERE id=?`)
+      .run(next.name, next.phone, next.note, next.dueDays, next.archived ? 1 : 0, next.updatedAt, id);
+    return (await this.getCustomer(id))!;
+  }
+
+  // ---- 生意：订单 ----
+  private customerBookId(id: string): string {
+    const r = this.db.prepare('SELECT book_id FROM customers WHERE id = ? AND deleted = 0').get(id) as
+      | { book_id: string }
+      | undefined;
+    if (!r) throw new Error(`客户不存在：${id}`);
+    return r.book_id;
+  }
+
+  private insertOrderLines(orderId: string, lines: Order['lines']): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO order_lines (id, order_id, name, qty, unit_price) VALUES (?, ?, ?, ?, ?)`,
+    );
+    for (const l of lines) stmt.run(l.id, orderId, l.name, l.qty, l.unitPrice);
+  }
+
+  async addOrder(order: Order): Promise<StoredOrder> {
+    if (this.db.prepare('SELECT 1 FROM orders WHERE id = ?').get(order.id)) {
+      throw new Error(`订单已存在：${order.id}`);
+    }
+    this.assertBook(order.bookId);
+    if (this.customerBookId(order.customerId) !== order.bookId) throw new Error('订单客户必须与订单同账本');
+    const ts = this.now();
+    this.tx(() => {
+      this.db
+        .prepare(
+          `INSERT INTO orders (id, book_id, customer_id, date, status, note, revenue_txn_id, created_at, updated_at, deleted)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+        )
+        .run(order.id, order.bookId, order.customerId, order.date, order.status, order.note, order.revenueTxnId, ts, ts);
+      this.insertOrderLines(order.id, order.lines);
+    });
+    return (await this.getOrder(order.id))!;
+  }
+
+  async getOrder(id: string): Promise<StoredOrder | null> {
+    const r = this.db.prepare('SELECT * FROM orders WHERE id = ? AND deleted = 0').get(id) as OrderRow | undefined;
+    if (!r) return null;
+    const lines = (
+      this.db.prepare('SELECT * FROM order_lines WHERE order_id = ?').all(id) as unknown as OrderLineRow[]
+    ).map(toOrderLine);
+    return toOrder(r, lines);
+  }
+
+  async listOrders(query: { bookId?: string; customerId?: string; status?: OrderStatus } = {}): Promise<StoredOrder[]> {
+    const cond = ['deleted = 0'];
+    const params: string[] = [];
+    if (query.bookId) {
+      cond.push('book_id = ?');
+      params.push(query.bookId);
+    }
+    if (query.customerId) {
+      cond.push('customer_id = ?');
+      params.push(query.customerId);
+    }
+    if (query.status) {
+      cond.push('status = ?');
+      params.push(query.status);
+    }
+    const rows = this.db
+      .prepare(`SELECT * FROM orders WHERE ${cond.join(' AND ')} ORDER BY date DESC, created_at DESC, id DESC`)
+      .all(...params) as unknown as OrderRow[];
+    if (rows.length === 0) return [];
+    const byOrder = new Map<string, OrderLineRow[]>();
+    for (const batch of chunk(rows.map((r) => r.id), 500)) {
+      const placeholders = batch.map(() => '?').join(', ');
+      const lineRows = this.db
+        .prepare(`SELECT * FROM order_lines WHERE order_id IN (${placeholders})`)
+        .all(...batch) as unknown as OrderLineRow[];
+      for (const lr of lineRows) {
+        const arr = byOrder.get(lr.order_id) ?? [];
+        arr.push(lr);
+        byOrder.set(lr.order_id, arr);
+      }
+    }
+    return rows.map((r) => toOrder(r, (byOrder.get(r.id) ?? []).map(toOrderLine)));
+  }
+
+  async updateOrder(id: string, patch: OrderPatch): Promise<StoredOrder> {
+    const cur = await this.getOrder(id);
+    if (!cur) throw new Error(`订单不存在：${id}`);
+    const next: StoredOrder = { ...cur, ...patch, updatedAt: this.now() };
+    this.db
+      .prepare(`UPDATE orders SET status=?, note=?, revenue_txn_id=?, updated_at=? WHERE id=?`)
+      .run(next.status, next.note, next.revenueTxnId, next.updatedAt, id);
+    return (await this.getOrder(id))!;
+  }
+
+  // ---- 生意：收款 ----
+  async addSettlement(settlement: Settlement): Promise<StoredSettlement> {
+    if (this.db.prepare('SELECT 1 FROM settlements WHERE id = ?').get(settlement.id)) {
+      throw new Error(`收款已存在：${settlement.id}`);
+    }
+    this.assertBook(settlement.bookId);
+    if (settlement.counterpartyType === 'customer') {
+      if (this.customerBookId(settlement.counterpartyId) !== settlement.bookId) {
+        throw new Error('收款客户必须与收款同账本');
+      }
+    }
+    if (settlement.orderId !== null) {
+      const o = this.db.prepare('SELECT book_id FROM orders WHERE id = ? AND deleted = 0').get(settlement.orderId) as
+        | { book_id: string }
+        | undefined;
+      if (!o) throw new Error(`关联订单不存在：${settlement.orderId}`);
+      if (o.book_id !== settlement.bookId) throw new Error('关联订单必须与收款同账本');
+    }
+    const ts = this.now();
+    this.db
+      .prepare(
+        `INSERT INTO settlements (id, book_id, direction, counterparty_type, counterparty_id, order_id, amount, date, method, account_id, note, txn_id, created_at, updated_at, deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      )
+      .run(
+        settlement.id,
+        settlement.bookId,
+        settlement.direction,
+        settlement.counterpartyType,
+        settlement.counterpartyId,
+        settlement.orderId,
+        settlement.amount,
+        settlement.date,
+        settlement.method,
+        settlement.accountId,
+        settlement.note,
+        settlement.txnId,
+        ts,
+        ts,
+      );
+    return (await this.getSettlement(settlement.id))!;
+  }
+
+  private async getSettlement(id: string): Promise<StoredSettlement | null> {
+    const r = this.db.prepare('SELECT * FROM settlements WHERE id = ? AND deleted = 0').get(id) as
+      | SettlementRow
+      | undefined;
+    return r ? toSettlement(r) : null;
+  }
+
+  async listSettlements(
+    query: { bookId?: string; orderId?: string; counterpartyId?: string } = {},
+  ): Promise<StoredSettlement[]> {
+    const cond = ['deleted = 0'];
+    const params: string[] = [];
+    if (query.bookId) {
+      cond.push('book_id = ?');
+      params.push(query.bookId);
+    }
+    if (query.orderId) {
+      cond.push('order_id = ?');
+      params.push(query.orderId);
+    }
+    if (query.counterpartyId) {
+      cond.push('counterparty_id = ?');
+      params.push(query.counterpartyId);
+    }
+    const rows = this.db
+      .prepare(`SELECT * FROM settlements WHERE ${cond.join(' AND ')} ORDER BY date DESC, created_at DESC, id DESC`)
+      .all(...params) as unknown as SettlementRow[];
+    return rows.map(toSettlement);
   }
 }
