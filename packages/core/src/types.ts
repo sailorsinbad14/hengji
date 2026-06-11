@@ -45,6 +45,8 @@ export interface Posting {
   /** 有符号最小单位；同一交易下所有 posting 之和 === 0 */
   amount: Minor;
   currency: string;
+  /** 已核销（对账勾对）。月度对账完成时置位；缺省/false = 未核销。 */
+  cleared?: boolean;
 }
 
 export interface Transaction {
@@ -154,4 +156,23 @@ export interface Settlement {
   note: string;
   /** 生成的核销分录 id */
   txnId: string | null;
+}
+
+/**
+ * 月度对账会话（勾对式 statement reconciliation，v0.2）：
+ * 把某账户流水逐笔勾对真实对账单，差额对到 0 才完成。完成时记一条历史，
+ * 并把勾选的分录标记 cleared。详见 ARCHITECTURE.md「月度对账」。
+ * MVP 只存「已完成」记录（审计/上次对账基线）；勾选中途状态活在 UI。
+ */
+export interface Reconciliation {
+  id: string;
+  bookId: string;
+  /** 对账的账户（资产/负债） */
+  accountId: string;
+  /** 对账单余额（有符号最小单位，与账户余额同号约定） */
+  statementBalance: Minor;
+  /** 对账截止日 YYYY-MM-DD */
+  statementDate: string;
+  /** 完成时间 ISO */
+  completedAt: string;
 }

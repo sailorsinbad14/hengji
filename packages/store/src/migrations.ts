@@ -9,6 +9,8 @@
  * - m4：商品主数据 C1（products 表 + order_lines.product_id 列）；纯新增。
  * - m5：去掉 settlements.method 列（收款账户即渠道，方式冗余）。
  * - m6：通用设置表 settings（scope+key 主键，value 字符串）；app/账本级共用，纯新增。
+ * - m7：月度对账——postings 加 cleared 列（已核销标记）+ reconciliations 表（完成记录）。
+ *   既有 posting 默认 cleared=0；纯新增列/表，不动既有数据。
  */
 
 export interface SqlRunner {
@@ -187,7 +189,26 @@ const M6: string[] = [
   )`,
 ];
 
-export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5, M6];
+// m7：月度对账。postings.cleared 标记某分录已核销；reconciliations 存完成的对账会话
+// （账户+对账单余额+截止日+完成时间）作审计/上次对账基线。补录/改/删纠错复用现成 CRUD。
+const M7: string[] = [
+  `ALTER TABLE postings ADD COLUMN cleared INTEGER NOT NULL DEFAULT 0`,
+  `CREATE TABLE IF NOT EXISTS reconciliations (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    statement_balance INTEGER NOT NULL,
+    statement_date TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_reconciliations_book ON reconciliations(book_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_reconciliations_account ON reconciliations(account_id)`,
+];
+
+export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5, M6, M7];
 
 export async function migrate(r: SqlRunner): Promise<void> {
   const v = await r.getVersion();

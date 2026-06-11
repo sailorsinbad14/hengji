@@ -13,9 +13,10 @@ import Accounts from './views/Accounts';
 import Customers from './views/Customers';
 import Orders from './views/Orders';
 import Products from './views/Products';
+import Reconcile from './views/Reconcile';
 import Settings from './views/Settings';
 
-type View = 'dashboard' | 'txns' | 'budgets' | 'invest' | 'accounts' | 'customers' | 'orders' | 'products' | 'settings';
+type View = 'dashboard' | 'txns' | 'budgets' | 'invest' | 'accounts' | 'reconcile' | 'customers' | 'orders' | 'products' | 'settings';
 
 export interface AppData {
   repo: Repository;
@@ -36,6 +37,7 @@ const TABS: Record<BookType, Array<[View, string]>> = {
     ['txns', '流水'],
     ['budgets', '预算'],
     ['accounts', '账户'],
+    ['reconcile', '对账'],
     ['settings', '设置'],
   ],
   business: [
@@ -46,12 +48,14 @@ const TABS: Record<BookType, Array<[View, string]>> = {
     ['txns', '流水'],
     ['budgets', '预算'],
     ['accounts', '账户'],
+    ['reconcile', '对账'],
     ['settings', '设置'],
   ],
   investment: [
     ['invest', '投资'],
     ['txns', '流水'],
     ['accounts', '账户'],
+    ['reconcile', '对账'],
     ['settings', '设置'],
   ],
 };
@@ -226,6 +230,7 @@ export default function App() {
             {view === 'budgets' && <Budgets data={data} />}
             {view === 'invest' && <Invest data={data} />}
             {view === 'accounts' && <Accounts data={data} />}
+            {view === 'reconcile' && <Reconcile data={data} />}
             {view === 'customers' && <Customers data={data} />}
             {view === 'orders' && <Orders data={data} />}
             {view === 'products' && <Products data={data} />}

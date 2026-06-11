@@ -1,4 +1,4 @@
-import type { Account, Book, Budget, Customer, Order, OrderStatus, Product, Settlement, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, Order, OrderStatus, Product, Reconciliation, Settlement, Transaction } from '@app/core';
 
 /** 每条记录都带的同步元数据，为将来的云同步预留。 */
 export interface SyncMeta {
@@ -16,6 +16,7 @@ export type StoredCustomer = Customer & SyncMeta;
 export type StoredOrder = Order & SyncMeta;
 export type StoredSettlement = Settlement & SyncMeta;
 export type StoredProduct = Product & SyncMeta;
+export type StoredReconciliation = Reconciliation & SyncMeta;
 
 /**
  * 通用设置项（KV）。scope = 'app' 为应用级，或某账本 id 为账本级。
@@ -143,4 +144,10 @@ export interface Repository {
   getSetting(scope: string, key: string): Promise<StoredSetting | null>;
   setSetting(scope: string, key: string, value: string): Promise<StoredSetting>;
   listSettings(scope?: string): Promise<StoredSetting[]>;
+
+  // 月度对账：标记分录已核销 + 记录完成的对账会话。补录/改/删纠错复用现有交易 CRUD。
+  // setPostingsCleared 直接按 posting id 批量置位（完成对账时写入勾选状态全集）。
+  setPostingsCleared(postingIds: string[], cleared: boolean): Promise<void>;
+  addReconciliation(rec: Reconciliation): Promise<StoredReconciliation>;
+  listReconciliations(query?: { bookId?: string; accountId?: string }): Promise<StoredReconciliation[]>;
 }

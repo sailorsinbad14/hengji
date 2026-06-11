@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Customer, Order, OrderStatus, Posting, Product, Settlement, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, Order, OrderStatus, Posting, Product, Reconciliation, Settlement, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
@@ -16,6 +16,7 @@ import type {
   StoredCustomer,
   StoredOrder,
   StoredProduct,
+  StoredReconciliation,
   StoredSetting,
   StoredSettlement,
   StoredTransaction,
@@ -32,6 +33,7 @@ import {
   toOrderLine,
   toPosting,
   toProduct,
+  toReconciliation,
   toSetting,
   toSettlement,
   toTxn,
@@ -45,6 +47,7 @@ import type {
   OrderRow,
   PostingRow,
   ProductRow,
+  ReconciliationRow,
   SettingRow,
   SettlementRow,
   TxnRow,
@@ -226,10 +229,10 @@ export class SqliteRepository implements Repository {
 
   private insertPostings(txnId: string, postings: Posting[]): void {
     const stmt = this.db.prepare(
-      `INSERT INTO postings (id, txn_id, account_id, amount, currency) VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO postings (id, txn_id, account_id, amount, currency, cleared) VALUES (?, ?, ?, ?, ?, ?)`,
     );
     for (const p of postings) {
-      stmt.run(p.id, txnId, p.accountId, p.amount, p.currency);
+      stmt.run(p.id, txnId, p.accountId, p.amount, p.currency, p.cleared ? 1 : 0);
     }
   }
 
@@ -670,5 +673,59 @@ export class SqliteRepository implements Repository {
         : this.db.prepare('SELECT * FROM settings WHERE scope = ?').all(scope)
     ) as unknown as SettingRow[];
     return rows.map(toSetting);
+  }
+
+  // ---- 月度对账 ----
+  async setPostingsCleared(postingIds: string[], cleared: boolean): Promise<void> {
+    if (postingIds.length === 0) return;
+    const stmt = this.db.prepare('UPDATE postings SET cleared = ? WHERE id = ?');
+    const c = cleared ? 1 : 0;
+    this.tx(() => {
+      for (const id of postingIds) stmt.run(c, id);
+    });
+  }
+
+  async addReconciliation(rec: Reconciliation): Promise<StoredReconciliation> {
+    if (this.db.prepare('SELECT 1 FROM reconciliations WHERE id = ?').get(rec.id)) {
+      throw new Error(`对账记录已存在：${rec.id}`);
+    }
+    this.assertBook(rec.bookId);
+    const acc = this.db
+      .prepare('SELECT book_id FROM accounts WHERE id = ? AND deleted = 0')
+      .get(rec.accountId) as { book_id: string } | undefined;
+    if (!acc) throw new Error(`对账账户不存在：${rec.accountId}`);
+    if (acc.book_id !== rec.bookId) throw new Error('对账账户必须与对账同账本');
+    const ts = this.now();
+    this.db
+      .prepare(
+        `INSERT INTO reconciliations (id, book_id, account_id, statement_balance, statement_date, completed_at, created_at, updated_at, deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      )
+      .run(rec.id, rec.bookId, rec.accountId, rec.statementBalance, rec.statementDate, rec.completedAt, ts, ts);
+    return (await this.getReconciliation(rec.id))!;
+  }
+
+  private async getReconciliation(id: string): Promise<StoredReconciliation | null> {
+    const r = this.db.prepare('SELECT * FROM reconciliations WHERE id = ? AND deleted = 0').get(id) as
+      | ReconciliationRow
+      | undefined;
+    return r ? toReconciliation(r) : null;
+  }
+
+  async listReconciliations(query: { bookId?: string; accountId?: string } = {}): Promise<StoredReconciliation[]> {
+    const cond = ['deleted = 0'];
+    const params: string[] = [];
+    if (query.bookId) {
+      cond.push('book_id = ?');
+      params.push(query.bookId);
+    }
+    if (query.accountId) {
+      cond.push('account_id = ?');
+      params.push(query.accountId);
+    }
+    const rows = this.db
+      .prepare(`SELECT * FROM reconciliations WHERE ${cond.join(' AND ')} ORDER BY completed_at DESC, id DESC`)
+      .all(...params) as unknown as ReconciliationRow[];
+    return rows.map(toReconciliation);
   }
 }

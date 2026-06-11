@@ -1,6 +1,6 @@
 import Database from '@tauri-apps/plugin-sql';
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Customer, Order, OrderStatus, Posting, Product, Settlement, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, Order, OrderStatus, Posting, Product, Reconciliation, Settlement, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
@@ -16,6 +16,7 @@ import type {
   StoredCustomer,
   StoredOrder,
   StoredProduct,
+  StoredReconciliation,
   StoredSetting,
   StoredSettlement,
   StoredTransaction,
@@ -32,6 +33,7 @@ import {
   toOrderLine,
   toPosting,
   toProduct,
+  toReconciliation,
   toSetting,
   toSettlement,
   toTxn,
@@ -45,6 +47,7 @@ import type {
   OrderRow,
   PostingRow,
   ProductRow,
+  ReconciliationRow,
   SettingRow,
   SettlementRow,
   TxnRow,
@@ -232,8 +235,8 @@ export class TauriSqlRepository implements Repository {
   private async insertPostings(txnId: string, postings: Posting[]): Promise<void> {
     for (const p of postings) {
       await this.db.execute(
-        'INSERT INTO postings (id, txn_id, account_id, amount, currency) VALUES ($1, $2, $3, $4, $5)',
-        [p.id, txnId, p.accountId, p.amount, p.currency],
+        'INSERT INTO postings (id, txn_id, account_id, amount, currency, cleared) VALUES ($1, $2, $3, $4, $5, $6)',
+        [p.id, txnId, p.accountId, p.amount, p.currency, p.cleared ? 1 : 0],
       );
     }
   }
@@ -652,5 +655,60 @@ export class TauriSqlRepository implements Repository {
         ? await this.db.select<SettingRow[]>('SELECT * FROM settings')
         : await this.db.select<SettingRow[]>('SELECT * FROM settings WHERE scope = $1', [scope]);
     return rows.map(toSetting);
+  }
+
+  // ---- 月度对账 ----
+  // 顺序 autocommit（连接池下裸 BEGIN 会自锁，见上方说明）；批量置位非原子但单用户桌面可接受。
+  async setPostingsCleared(postingIds: string[], cleared: boolean): Promise<void> {
+    const c = cleared ? 1 : 0;
+    for (const id of postingIds) {
+      await this.db.execute('UPDATE postings SET cleared = $1 WHERE id = $2', [c, id]);
+    }
+  }
+
+  async addReconciliation(rec: Reconciliation): Promise<StoredReconciliation> {
+    if (await this.exists('SELECT 1 FROM reconciliations WHERE id = $1', [rec.id])) {
+      throw new Error(`对账记录已存在：${rec.id}`);
+    }
+    await this.assertBook(rec.bookId);
+    const acc = await this.db.select<Array<{ book_id: string }>>(
+      'SELECT book_id FROM accounts WHERE id = $1 AND deleted = 0',
+      [rec.accountId],
+    );
+    if (!acc[0]) throw new Error(`对账账户不存在：${rec.accountId}`);
+    if (acc[0].book_id !== rec.bookId) throw new Error('对账账户必须与对账同账本');
+    const ts = this.now();
+    await this.db.execute(
+      `INSERT INTO reconciliations (id, book_id, account_id, statement_balance, statement_date, completed_at, created_at, updated_at, deleted)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0)`,
+      [rec.id, rec.bookId, rec.accountId, rec.statementBalance, rec.statementDate, rec.completedAt, ts, ts],
+    );
+    return (await this.getReconciliation(rec.id))!;
+  }
+
+  private async getReconciliation(id: string): Promise<StoredReconciliation | null> {
+    const rows = await this.db.select<ReconciliationRow[]>(
+      'SELECT * FROM reconciliations WHERE id = $1 AND deleted = 0',
+      [id],
+    );
+    return rows[0] ? toReconciliation(rows[0]) : null;
+  }
+
+  async listReconciliations(query: { bookId?: string; accountId?: string } = {}): Promise<StoredReconciliation[]> {
+    const cond = ['deleted = 0'];
+    const params: unknown[] = [];
+    if (query.bookId) {
+      params.push(query.bookId);
+      cond.push(`book_id = $${params.length}`);
+    }
+    if (query.accountId) {
+      params.push(query.accountId);
+      cond.push(`account_id = $${params.length}`);
+    }
+    const rows = await this.db.select<ReconciliationRow[]>(
+      `SELECT * FROM reconciliations WHERE ${cond.join(' AND ')} ORDER BY completed_at DESC, id DESC`,
+      params,
+    );
+    return rows.map(toReconciliation);
   }
 }

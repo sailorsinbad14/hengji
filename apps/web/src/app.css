@@ -242,6 +242,31 @@ input:focus, select:focus { outline: 2px solid var(--brand-50); border-color: va
   background: var(--biz-50); color: var(--biz); margin-right: 8px;
 }
 
+/* 对账 */
+.rec-setup { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 12px; }
+.rec-setup label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink-soft); }
+.rec-hint { margin-top: 10px; }
+.rec-list { display: flex; flex-direction: column; }
+.rec-row {
+  display: grid; grid-template-columns: 20px 92px 1fr auto; align-items: center; gap: 10px;
+  padding: 8px 6px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 14px;
+}
+.rec-row:last-child { border-bottom: none; }
+.rec-row.on { background: var(--brand-50); border-radius: 8px; }
+.rec-row input { width: auto; }
+.rec-date { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.rec-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rec-amt { font-variant-numeric: tabular-nums; font-weight: 600; }
+.rec-amt.pos { color: var(--pos); }
+.rec-amt.neg { color: var(--neg); }
+.rec-foot { position: sticky; bottom: 0; }
+.rec-tally { display: flex; gap: 20px; align-items: center; font-size: 14px; }
+.rec-tally b { font-variant-numeric: tabular-nums; }
+.rec-diff { color: var(--neg); }
+.rec-diff.ok { color: var(--brand-700); }
+.rec-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 12px; }
+.rec-ok { color: var(--brand-700); font-size: 13px; margin-top: 8px; }
+
 /* 财务总表账本卡片 */
 .bookcards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
 .bookcard {

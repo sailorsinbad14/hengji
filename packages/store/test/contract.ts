@@ -465,4 +465,58 @@ export function runRepositoryContract(name: string, makeRepo: (now: Clock) => Re
       expect((await repo.listSettings()).length).toBe(3);
     });
   });
+
+  describe(`${name} · 月度对账`, () => {
+    it('分录默认未核销；setPostingsCleared 批量置位/取消，往返读到', async () => {
+      const repo = await seed(makeRepo(fakeClock()));
+      const t1 = await repo.listTransactions({ bookId: B1 });
+      const banks = t1.flatMap((t) => t.postings.filter((p) => p.accountId === 'bank'));
+      expect(banks.every((p) => !p.cleared)).toBe(true); // 默认全未核销
+      const ids = banks.slice(0, 2).map((p) => p.id);
+      await repo.setPostingsCleared(ids, true);
+      const after = (await repo.listTransactions({ bookId: B1 })).flatMap((t) => t.postings);
+      expect(after.filter((p) => p.cleared).map((p) => p.id).sort()).toEqual([...ids].sort());
+      // 取消核销
+      await repo.setPostingsCleared([ids[0]!], false);
+      const after2 = (await repo.listTransactions({ bookId: B1 })).flatMap((t) => t.postings).filter((p) => p.cleared);
+      expect(after2.map((p) => p.id)).toEqual([ids[1]]);
+      // 空数组 no-op
+      await repo.setPostingsCleared([], true);
+    });
+
+    it('addReconciliation 校验账本/账户同账本 + list 过滤 + 倒序', async () => {
+      const repo = await seed(makeRepo(fakeClock()));
+      const r1 = await repo.addReconciliation({
+        id: 'rc1',
+        bookId: B1,
+        accountId: 'bank',
+        statementBalance: 497000,
+        statementDate: '2026-05-31',
+        completedAt: '2026-05-31T10:00:00Z',
+      });
+      expect(r1.deleted).toBe(false);
+      expect(r1.createdAt.startsWith('2026-01-01')).toBe(true);
+      // 账户不存在 / 账户跨账本 → 拒
+      await expect(
+        repo.addReconciliation({ id: 'rcX', bookId: B1, accountId: 'ghost', statementBalance: 0, statementDate: '2026-05-31', completedAt: 'x' }),
+      ).rejects.toThrow();
+      await expect(
+        repo.addReconciliation({ id: 'rcY', bookId: B1, accountId: 'b2bank', statementBalance: 0, statementDate: '2026-05-31', completedAt: 'x' }),
+      ).rejects.toThrow(/同账本/);
+      await repo.addReconciliation({
+        id: 'rc2',
+        bookId: B1,
+        accountId: 'bank',
+        statementBalance: 500000,
+        statementDate: '2026-06-30',
+        completedAt: '2026-06-30T10:00:00Z',
+      });
+      // 倒序（最近完成在前）+ 账户过滤
+      expect((await repo.listReconciliations({ accountId: 'bank' })).map((r) => r.id)).toEqual(['rc2', 'rc1']);
+      expect((await repo.listReconciliations({ bookId: B2 })).length).toBe(0);
+      await expect(
+        repo.addReconciliation({ id: 'rc1', bookId: B1, accountId: 'bank', statementBalance: 1, statementDate: 'x', completedAt: 'x' }),
+      ).rejects.toThrow();
+    });
+  });
 }

@@ -6,6 +6,7 @@ import type {
   StoredCustomer,
   StoredOrder,
   StoredProduct,
+  StoredReconciliation,
   StoredSetting,
   StoredSettlement,
   StoredTransaction,
@@ -55,6 +56,7 @@ export interface PostingRow {
   account_id: string;
   amount: number;
   currency: string;
+  cleared: number;
 }
 export interface BudgetRow {
   id: string;
@@ -132,6 +134,17 @@ export interface SettingRow {
   value: string;
   updated_at: string;
 }
+export interface ReconciliationRow {
+  id: string;
+  book_id: string;
+  account_id: string;
+  statement_balance: number;
+  statement_date: string;
+  completed_at: string;
+  created_at: string;
+  updated_at: string;
+  deleted: number;
+}
 
 /** 把数组按 size 切片，避免 `IN (?,?,…)` 占位符超过 SQLite 变量上限（旧版 999/新版 32766）。 */
 export function chunk<T>(arr: T[], size: number): T[][] {
@@ -178,7 +191,7 @@ export function toAccount(r: AccountRow): StoredAccount {
 }
 
 export function toPosting(r: PostingRow): Posting {
-  return { id: r.id, txnId: r.txn_id, accountId: r.account_id, amount: r.amount, currency: r.currency };
+  return { id: r.id, txnId: r.txn_id, accountId: r.account_id, amount: r.amount, currency: r.currency, cleared: r.cleared !== 0 };
 }
 
 export function toBudget(r: BudgetRow): StoredBudget {
@@ -265,6 +278,20 @@ export function toSettlement(r: SettlementRow): StoredSettlement {
 
 export function toSetting(r: SettingRow): StoredSetting {
   return { scope: r.scope, key: r.key, value: r.value, updatedAt: r.updated_at };
+}
+
+export function toReconciliation(r: ReconciliationRow): StoredReconciliation {
+  return {
+    id: r.id,
+    bookId: r.book_id,
+    accountId: r.account_id,
+    statementBalance: r.statement_balance,
+    statementDate: r.statement_date,
+    completedAt: r.completed_at,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deleted: r.deleted !== 0,
+  };
 }
 
 export function toTxn(r: TxnRow, postings: Posting[]): StoredTransaction {

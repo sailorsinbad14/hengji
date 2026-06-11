@@ -1,5 +1,5 @@
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Customer, Order, OrderStatus, Product, Settlement, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, Order, OrderStatus, Product, Reconciliation, Settlement, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
@@ -15,6 +15,7 @@ import type {
   StoredCustomer,
   StoredOrder,
   StoredProduct,
+  StoredReconciliation,
   StoredSetting,
   StoredSettlement,
   StoredTransaction,
@@ -44,6 +45,7 @@ export class InMemoryRepository implements Repository {
   private readonly settlements = new Map<string, StoredSettlement>();
   private readonly products = new Map<string, StoredProduct>();
   private readonly settings = new Map<string, StoredSetting>();
+  private readonly reconciliations = new Map<string, StoredReconciliation>();
   private readonly now: Clock;
 
   constructor(opts: { now?: Clock } = {}) {
@@ -391,6 +393,42 @@ export class InMemoryRepository implements Repository {
       if (scope !== undefined && s.scope !== scope) continue;
       out.push(clone(s));
     }
+    return out;
+  }
+
+  // ---- 月度对账 ----
+  async setPostingsCleared(postingIds: string[], cleared: boolean): Promise<void> {
+    const idSet = new Set(postingIds);
+    for (const t of this.txns.values()) {
+      if (t.deleted) continue;
+      for (const p of t.postings) {
+        if (idSet.has(p.id)) p.cleared = cleared;
+      }
+    }
+  }
+
+  async addReconciliation(rec: Reconciliation): Promise<StoredReconciliation> {
+    if (this.reconciliations.has(rec.id)) throw new Error(`对账记录已存在：${rec.id}`);
+    this.liveBook(rec.bookId);
+    const acc = this.accounts.get(rec.accountId);
+    if (!acc || acc.deleted) throw new Error(`对账账户不存在：${rec.accountId}`);
+    if (acc.bookId !== rec.bookId) throw new Error('对账账户必须与对账同账本');
+    const ts = this.now();
+    const stored: StoredReconciliation = { ...clone(rec), createdAt: ts, updatedAt: ts, deleted: false };
+    this.reconciliations.set(rec.id, stored);
+    return clone(stored);
+  }
+
+  async listReconciliations(query: { bookId?: string; accountId?: string } = {}): Promise<StoredReconciliation[]> {
+    const out: StoredReconciliation[] = [];
+    for (const r of this.reconciliations.values()) {
+      if (r.deleted) continue;
+      if (query.bookId && r.bookId !== query.bookId) continue;
+      if (query.accountId && r.accountId !== query.accountId) continue;
+      out.push(clone(r));
+    }
+    // 倒序：最近完成在前（completedAt DESC，再 id DESC tie-break）
+    out.sort((a, b) => (a.completedAt !== b.completedAt ? (a.completedAt < b.completedAt ? 1 : -1) : a.id < b.id ? 1 : -1));
     return out;
   }
 }
