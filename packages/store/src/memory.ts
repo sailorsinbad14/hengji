@@ -143,9 +143,11 @@ export class InMemoryRepository implements Repository {
       if (query.accountId && !t.postings.some((p) => p.accountId === query.accountId)) continue;
       out.push(clone(t));
     }
-    out.sort((a, b) =>
-      a.date < b.date ? 1 : a.date > b.date ? -1 : a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0,
-    );
+    out.sort((a, b) => {
+      if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+      return a.id < b.id ? 1 : a.id > b.id ? -1 : 0; // 终极 tie-break，三实现一致、稳定
+    });
     return out;
   }
 

@@ -13,7 +13,7 @@ import type {
   StoredTransaction,
   TxnQuery,
 } from './types';
-import { toAccount, toBook, toBudget, toPosting, toTxn } from './schema';
+import { chunk, parseTags, toAccount, toBook, toBudget, toPosting, toTxn } from './schema';
 import type { AccountRow, BookRow, BudgetRow, PostingRow, TxnRow } from './schema';
 import { migrateSync } from './migrations';
 
@@ -229,23 +229,24 @@ export class SqliteRepository implements Repository {
       cond.push('EXISTS (SELECT 1 FROM postings p WHERE p.txn_id = t.id AND p.account_id = ?)');
       params.push(query.accountId);
     }
-    const sql = `SELECT t.* FROM transactions t WHERE ${cond.join(' AND ')} ORDER BY t.date DESC, t.created_at DESC`;
+    const sql = `SELECT t.* FROM transactions t WHERE ${cond.join(' AND ')} ORDER BY t.date DESC, t.created_at DESC, t.id DESC`;
     let rows = this.db.prepare(sql).all(...params) as unknown as TxnRow[];
     if (query.tag) {
       const tag = query.tag;
-      rows = rows.filter((r) => (JSON.parse(r.tags) as string[]).includes(tag));
+      rows = rows.filter((r) => parseTags(r.tags).includes(tag));
     }
     if (rows.length === 0) return [];
-    const ids = rows.map((r) => r.id);
-    const placeholders = ids.map(() => '?').join(', ');
-    const postingRows = this.db
-      .prepare(`SELECT * FROM postings WHERE txn_id IN (${placeholders})`)
-      .all(...ids) as unknown as PostingRow[];
     const byTxn = new Map<string, Posting[]>();
-    for (const pr of postingRows) {
-      const arr = byTxn.get(pr.txn_id) ?? [];
-      arr.push(toPosting(pr));
-      byTxn.set(pr.txn_id, arr);
+    for (const batch of chunk(rows.map((r) => r.id), 500)) {
+      const placeholders = batch.map(() => '?').join(', ');
+      const postingRows = this.db
+        .prepare(`SELECT * FROM postings WHERE txn_id IN (${placeholders})`)
+        .all(...batch) as unknown as PostingRow[];
+      for (const pr of postingRows) {
+        const arr = byTxn.get(pr.txn_id) ?? [];
+        arr.push(toPosting(pr));
+        byTxn.set(pr.txn_id, arr);
+      }
     }
     return rows.map((r) => toTxn(r, byTxn.get(r.id) ?? []));
   }

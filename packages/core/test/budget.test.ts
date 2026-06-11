@@ -49,4 +49,19 @@ describe('budgetUsage', () => {
       over: false,
     });
   });
+
+  it('月份精确匹配：非规范前缀（2026-1 / 2026）不会错配其他月', () => {
+    const gen = counter();
+    const txns = [
+      expandEntry({ kind: 'expense', bookId: B, date: '2026-10-05', amount: 10000, accountId: 'bank', categoryId: 'food' }, gen),
+      expandEntry({ kind: 'expense', bookId: B, date: '2026-01-05', amount: 20000, accountId: 'bank', categoryId: 'food' }, gen),
+    ];
+    const budgets: Budget[] = [{ id: 'b1', bookId: B, accountId: 'food', monthlyLimit: 50000 }];
+    // 旧 startsWith 实现下 '2026-1' 会错配 2026-10、'2026' 会匹配全年
+    expect(budgetUsage(txns, budgets, '2026-1')[0]!.spent).toBe(0);
+    expect(budgetUsage(txns, budgets, '2026')[0]!.spent).toBe(0);
+    // 规范 'YYYY-MM' 精确命中
+    expect(budgetUsage(txns, budgets, '2026-01')[0]!.spent).toBe(20000);
+    expect(budgetUsage(txns, budgets, '2026-10')[0]!.spent).toBe(10000);
+  });
 });

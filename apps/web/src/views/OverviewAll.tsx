@@ -16,8 +16,13 @@ export default function OverviewAll({
 }) {
   const month = currentMonth();
   const period = { from: `${month}-01`, to: `${month}-31` };
-  const totalNw = netWorth(txns, accounts);
-  const totalIe = incomeExpense(txns, accounts, { period });
+  // 只汇总可见（非归档）账本：books 已排除归档，但 accounts/txns 是全量，
+  // 按 books 的 id 过滤，避免归档账本仍计入总净资产/收支、与下方各账本卡片之和对不上。
+  const visible = new Set(books.map((b) => b.id));
+  const va = accounts.filter((x) => visible.has(x.bookId));
+  const vt = txns.filter((x) => visible.has(x.bookId));
+  const totalNw = netWorth(vt, va);
+  const totalIe = incomeExpense(vt, va, { period });
 
   const perBook = books.map((b) => {
     const a = accounts.filter((x) => x.bookId === b.id);

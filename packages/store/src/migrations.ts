@@ -69,10 +69,14 @@ const M2: string[] = [
   `ALTER TABLE accounts ADD COLUMN book_id TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE transactions ADD COLUMN book_id TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE budgets ADD COLUMN book_id TEXT NOT NULL DEFAULT ''`,
-  // 遗留数据回填：有任何旧账户才建默认账本
+  // 遗留数据回填：只要有任何待回填数据（账户/交易/预算任一非空）就建默认账本，
+  // 与下方三条 UPDATE 的回填判据保持一致，避免「有交易/预算但无账户」的边界库
+  // 把数据回填到一个不存在的 'default' 账本（悬空 book_id）。
   `INSERT INTO books (id, name, type, archived, created_at, updated_at, deleted)
      SELECT 'default', '我的账本', 'personal', 0, datetime('now'), datetime('now'), 0
-     WHERE EXISTS (SELECT 1 FROM accounts)
+     WHERE (EXISTS (SELECT 1 FROM accounts)
+            OR EXISTS (SELECT 1 FROM transactions)
+            OR EXISTS (SELECT 1 FROM budgets))
        AND NOT EXISTS (SELECT 1 FROM books WHERE id = 'default')`,
   `UPDATE accounts SET book_id = 'default' WHERE book_id = ''`,
   `UPDATE transactions SET book_id = 'default' WHERE book_id = ''`,

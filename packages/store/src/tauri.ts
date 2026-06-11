@@ -13,7 +13,7 @@ import type {
   StoredTransaction,
   TxnQuery,
 } from './types';
-import { toAccount, toBook, toBudget, toPosting, toTxn } from './schema';
+import { chunk, parseTags, toAccount, toBook, toBudget, toPosting, toTxn } from './schema';
 import type { AccountRow, BookRow, BudgetRow, PostingRow, TxnRow } from './schema';
 import { migrate } from './migrations';
 
@@ -38,6 +38,7 @@ export class TauriSqlRepository implements Repository {
     // PRAGMA journal_mode 会返回一行结果，必须走 select
     await db.select('PRAGMA journal_mode = WAL');
     await db.select('PRAGMA foreign_keys = ON');
+    await db.select('PRAGMA busy_timeout = 5000');
     await migrate({
       run: async (sql) => {
         await db.execute(sql);
@@ -57,16 +58,11 @@ export class TauriSqlRepository implements Repository {
     await this.db.close();
   }
 
-  private async tx(fn: () => Promise<void>): Promise<void> {
-    await this.db.execute('BEGIN');
-    try {
-      await fn();
-      await this.db.execute('COMMIT');
-    } catch (e) {
-      await this.db.execute('ROLLBACK');
-      throw e;
-    }
-  }
+  // 注：tauri-plugin-sql 底层是 sqlx 连接池（多连接）。裸 BEGIN/COMMIT 会被池分发到
+  // 不同连接，导致开 BEGIN 的连接留下未提交写事务、锁死整库（SQLITE_BUSY: database is
+  // locked）。因此多写操作改为顺序 autocommit——单用户桌面串行写，不会自锁。
+  // 已知限制：一笔交易的多条写非原子；进程在两条写之间崩溃的极端情况下可能留下不完整交易。
+  // 后续若 plugin 支持单连接事务、或迁移到自管 Rust SQL 层，再恢复跨语句原子性。
 
   private async exists(sql: string, params: unknown[]): Promise<boolean> {
     const rows = await this.db.select<unknown[]>(sql, params);
@@ -190,14 +186,12 @@ export class TauriSqlRepository implements Repository {
     assertBalanced(txn.postings);
     await this.assertSameBook(txn);
     const ts = this.now();
-    await this.tx(async () => {
-      await this.db.execute(
-        `INSERT INTO transactions (id, book_id, date, payee, note, tags, created_at, updated_at, deleted)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0)`,
-        [txn.id, txn.bookId, txn.date, txn.payee, txn.note, JSON.stringify(txn.tags), ts, ts],
-      );
-      await this.insertPostings(txn.id, txn.postings);
-    });
+    await this.db.execute(
+      `INSERT INTO transactions (id, book_id, date, payee, note, tags, created_at, updated_at, deleted)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0)`,
+      [txn.id, txn.bookId, txn.date, txn.payee, txn.note, JSON.stringify(txn.tags), ts, ts],
+    );
+    await this.insertPostings(txn.id, txn.postings);
     return (await this.getTransaction(txn.id))!;
   }
 
@@ -237,24 +231,25 @@ export class TauriSqlRepository implements Repository {
       params.push(query.accountId);
       cond.push(`EXISTS (SELECT 1 FROM postings p WHERE p.txn_id = t.id AND p.account_id = $${params.length})`);
     }
-    const sql = `SELECT t.* FROM transactions t WHERE ${cond.join(' AND ')} ORDER BY t.date DESC, t.created_at DESC`;
+    const sql = `SELECT t.* FROM transactions t WHERE ${cond.join(' AND ')} ORDER BY t.date DESC, t.created_at DESC, t.id DESC`;
     let rows = await this.db.select<TxnRow[]>(sql, params);
     if (query.tag) {
       const tag = query.tag;
-      rows = rows.filter((r) => (JSON.parse(r.tags) as string[]).includes(tag));
+      rows = rows.filter((r) => parseTags(r.tags).includes(tag));
     }
     if (rows.length === 0) return [];
-    const ids = rows.map((r) => r.id);
-    const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
-    const postingRows = await this.db.select<PostingRow[]>(
-      `SELECT * FROM postings WHERE txn_id IN (${placeholders})`,
-      ids,
-    );
     const byTxn = new Map<string, Posting[]>();
-    for (const pr of postingRows) {
-      const arr = byTxn.get(pr.txn_id) ?? [];
-      arr.push(toPosting(pr));
-      byTxn.set(pr.txn_id, arr);
+    for (const batch of chunk(rows.map((r) => r.id), 500)) {
+      const placeholders = batch.map((_, i) => `$${i + 1}`).join(', ');
+      const postingRows = await this.db.select<PostingRow[]>(
+        `SELECT * FROM postings WHERE txn_id IN (${placeholders})`,
+        batch,
+      );
+      for (const pr of postingRows) {
+        const arr = byTxn.get(pr.txn_id) ?? [];
+        arr.push(toPosting(pr));
+        byTxn.set(pr.txn_id, arr);
+      }
     }
     return rows.map((r) => toTxn(r, byTxn.get(r.id) ?? []));
   }
@@ -267,18 +262,16 @@ export class TauriSqlRepository implements Repository {
     assertBalanced(txn.postings);
     await this.assertSameBook(txn);
     const ts = this.now();
-    await this.tx(async () => {
-      await this.db.execute('UPDATE transactions SET date=$1, payee=$2, note=$3, tags=$4, updated_at=$5 WHERE id=$6', [
-        txn.date,
-        txn.payee,
-        txn.note,
-        JSON.stringify(txn.tags),
-        ts,
-        id,
-      ]);
-      await this.db.execute('DELETE FROM postings WHERE txn_id = $1', [id]);
-      await this.insertPostings(id, txn.postings);
-    });
+    await this.db.execute('UPDATE transactions SET date=$1, payee=$2, note=$3, tags=$4, updated_at=$5 WHERE id=$6', [
+      txn.date,
+      txn.payee,
+      txn.note,
+      JSON.stringify(txn.tags),
+      ts,
+      id,
+    ]);
+    await this.db.execute('DELETE FROM postings WHERE txn_id = $1', [id]);
+    await this.insertPostings(id, txn.postings);
     return (await this.getTransaction(id))!;
   }
 

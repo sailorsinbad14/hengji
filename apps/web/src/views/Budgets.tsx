@@ -22,9 +22,13 @@ export default function Budgets({ data }: { data: AppData }) {
       setErr('请选择分类并输入有效限额');
       return;
     }
-    await repo.addBudget({ id: genId(), bookId: book.id, accountId: effAcc, monthlyLimit: toMinor(major) });
-    setLimit('');
-    await reload();
+    try {
+      await repo.addBudget({ id: genId(), bookId: book.id, accountId: effAcc, monthlyLimit: toMinor(major) });
+      setLimit('');
+      await reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
   }
 
   return (

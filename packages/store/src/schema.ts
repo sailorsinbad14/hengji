@@ -56,6 +56,23 @@ export interface BudgetRow {
   deleted: number;
 }
 
+/** 把数组按 size 切片，避免 `IN (?,?,…)` 占位符超过 SQLite 变量上限（旧版 999/新版 32766）。 */
+export function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+/** 安全解析 tags JSON：坏数据降级为空数组，避免单行损坏炸掉整个列表查询。 */
+export function parseTags(raw: string): string[] {
+  try {
+    const v = JSON.parse(raw) as unknown;
+    return Array.isArray(v) ? (v as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function toBook(r: BookRow): StoredBook {
   return {
     id: r.id,
@@ -106,7 +123,7 @@ export function toTxn(r: TxnRow, postings: Posting[]): StoredTransaction {
     date: r.date,
     payee: r.payee,
     note: r.note,
-    tags: JSON.parse(r.tags) as string[],
+    tags: parseTags(r.tags),
     postings,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
