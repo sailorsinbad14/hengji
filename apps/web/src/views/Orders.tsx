@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { allocateCustomerPayments, fromMinor, orderTotal, toMinor } from '@app/core';
-import type { OrderLine, OrderPaymentStatus, OrderStatus } from '@app/core';
-import type { StoredCustomer, StoredOrder, StoredProduct } from '@app/store';
+import type { CustomerPayment, OrderLine, OrderPaymentStatus, OrderStatus } from '@app/core';
+import type { StoredCustomer, StoredOrder, StoredProduct, StoredSettlement } from '@app/store';
 import type { AppData } from '../App';
 import { genId } from '../db';
 import { fmtMoney, todayISO } from '../format';
-import { completeOrder, receivableBalance, receivableSummary, recordCollection } from '../biz';
+import { completeOrder, receivableSummary, recordCollection } from '../biz';
 
 const STATUS: Record<OrderStatus, { label: string; cls: string }> = {
   pending_purchase: { label: '待采购', cls: '' },
@@ -30,6 +30,7 @@ export default function Orders({ data }: { data: AppData }) {
   const [customers, setCustomers] = useState<StoredCustomer[]>([]);
   const [orders, setOrders] = useState<StoredOrder[]>([]);
   const [products, setProducts] = useState<StoredProduct[]>([]);
+  const [settlements, setSettlements] = useState<StoredSettlement[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   // 新建订单表单
@@ -45,14 +46,16 @@ export default function Orders({ data }: { data: AppData }) {
   const [cAcct, setCAcct] = useState('');
 
   async function refresh(): Promise<void> {
-    const [cs, os, ps] = await Promise.all([
+    const [cs, os, ps, ss] = await Promise.all([
       repo.listCustomers({ bookId: book.id, includeArchived: true }),
       repo.listOrders({ bookId: book.id }),
       repo.listProducts({ bookId: book.id }),
+      repo.listSettlements({ bookId: book.id }),
     ]);
     setCustomers(cs);
     setOrders(os);
     setProducts(ps);
+    setSettlements(ss);
   }
   useEffect(() => {
     void refresh();
@@ -69,7 +72,8 @@ export default function Orders({ data }: { data: AppData }) {
     [lines],
   );
 
-  // 每客户 FIFO 把累计收款摊到已完成订单 → 每单收款状态 + 应收/预收概览
+  // 按「单据归属」把每笔收款摊到已完成订单（指定单优先，多付/未指定才 FIFO 顺延）
+  // → 每单收款状态 + 应收/预收概览。收款的 orderId 来自 settlements。
   const { payStatus, summary, outstanding } = useMemo(() => {
     const status = new Map<string, { status: OrderPaymentStatus; collected: number; total: number }>();
     const out: Array<{ order: StoredOrder; owed: number; days: number; overdue: boolean }> = [];
@@ -80,16 +84,21 @@ export default function Orders({ data }: { data: AppData }) {
       arr.push(o);
       byCust.set(o.customerId, arr);
     }
+    // 客户的收款明细（带 orderId）：只取收款方向、客户对手方
+    const paysByCust = new Map<string, CustomerPayment[]>();
+    for (const s of settlements) {
+      if (s.direction !== 'in' || s.counterpartyType !== 'customer') continue;
+      const arr = paysByCust.get(s.counterpartyId) ?? [];
+      arr.push({ orderId: s.orderId, amount: s.amount });
+      paysByCust.set(s.counterpartyId, arr);
+    }
     const today = todayISO();
     for (const [custId2, custOrders] of byCust) {
       const cust = customers.find((c) => c.id === custId2);
       if (!cust) continue;
-      const totalOrdered = custOrders.reduce((s, o) => s + orderTotal(o.lines), 0);
-      // 累计已收 = 已完成订单总额 − 应收子科目净额（完成单借应收、收款贷应收，二者之差即已收）
-      const totalCollected = totalOrdered - receivableBalance(accounts, txns, cust.name);
       const ledger = allocateCustomerPayments(
         custOrders.map((o) => ({ id: o.id, total: orderTotal(o.lines), date: o.date })),
-        totalCollected,
+        paysByCust.get(custId2) ?? [],
       );
       for (const a of ledger.allocations) {
         status.set(a.orderId, { status: a.status, collected: a.collected, total: a.total });
@@ -102,7 +111,7 @@ export default function Orders({ data }: { data: AppData }) {
     }
     out.sort((x, y) => y.days - x.days);
     return { payStatus: status, summary: receivableSummary(accounts, txns), outstanding: out };
-  }, [orders, customers, accounts, txns]);
+  }, [orders, customers, settlements, accounts, txns]);
 
   function setLine(key: string, patch: Partial<LineDraft>): void {
     setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
@@ -179,8 +188,9 @@ export default function Orders({ data }: { data: AppData }) {
   }
 
   function openCollect(order: StoredOrder): void {
-    const cust = customers.find((c) => c.id === order.customerId);
-    const owed = cust ? receivableBalance(accounts, txns, cust.name) : 0;
+    // 预填这张单自己还欠的金额（不是客户总欠款），避免在某张单上误收走别单的钱
+    const p = payStatus.get(order.id);
+    const owed = p ? p.total - p.collected : orderTotal(order.lines);
     setCollectFor(order.id);
     setCAmount(owed > 0 ? String(fromMinor(owed)) : '');
     setCDate(todayISO());

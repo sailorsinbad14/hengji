@@ -94,31 +94,72 @@ export interface CustomerLedger {
   prepaid: number;
 }
 
+/** 一笔收款：orderId 指定它收的是哪张单（null = 未指定，走 FIFO 顺延）。 */
+export interface CustomerPayment {
+  orderId: string | null;
+  /** 正数最小单位 */
+  amount: number;
+}
+
 /**
- * 把客户累计收款按下单先后（FIFO）摊到其已完成订单：
- * 先还最早的单，多付自动滚到后续订单，全部还清后剩余即预收（credit）。
+ * 把客户的收款按「单据归属」摊到其已完成订单，再算净应收/预收：
+ * 1) 指定了 orderId 的收款先记到该单（封顶到单据总额，超出进余款池）；
+ * 2) 未指定的收款 + 各单多付的余款，按下单先后（FIFO）顺延补到仍欠款的单；
+ * 3) 全部补满后还剩，即客户预收（credit）。
+ * 这样在某张单上记的收款只算到那张单，不会串到别的单（除非确有多付才顺延）。
  * @param orders 该客户的已完成订单（id + total 最小单位 + date）
- * @param totalCollected 该客户累计已收（最小单位，≥0）
+ * @param payments 该客户的收款明细（带 orderId）；金额负数按 0 处理
  */
 export function allocateCustomerPayments(
   orders: ReadonlyArray<{ id: string; total: number; date: string }>,
-  totalCollected: number,
+  payments: ReadonlyArray<CustomerPayment>,
 ): CustomerLedger {
-  const collected0 = Math.max(0, totalCollected);
   const sorted = [...orders].sort((a, b) =>
     a.date < b.date ? -1 : a.date > b.date ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
   );
-  let remaining = collected0;
+  const orderIds = new Set(sorted.map((o) => o.id));
+
+  // 1) 归集指定收款；未指定 / 指向不存在订单的，进 FIFO 池
+  const targeted = new Map<string, number>();
+  let pool = 0;
+  for (const p of payments) {
+    const amt = Math.max(0, p.amount);
+    if (p.orderId !== null && orderIds.has(p.orderId)) {
+      targeted.set(p.orderId, (targeted.get(p.orderId) ?? 0) + amt);
+    } else {
+      pool += amt;
+    }
+  }
+
+  // 2) 每单先吃自己被指定的收款（封顶），超出部分汇入 FIFO 池
+  const collectedBy = new Map<string, number>();
+  for (const o of sorted) {
+    const direct = targeted.get(o.id) ?? 0;
+    collectedBy.set(o.id, Math.min(direct, o.total));
+    if (direct > o.total) pool += direct - o.total;
+  }
+
+  // 3) 池子按下单先后补到仍欠款的单
+  for (const o of sorted) {
+    if (pool <= 0) break;
+    const cur = collectedBy.get(o.id)!;
+    const need = o.total - cur;
+    if (need <= 0) continue;
+    const add = Math.min(pool, need);
+    collectedBy.set(o.id, cur + add);
+    pool -= add;
+  }
+
   const allocations: OrderAllocation[] = sorted.map((o) => {
-    const collected = Math.min(remaining, o.total);
-    remaining -= collected;
+    const collected = collectedBy.get(o.id)!;
     const status: OrderPaymentStatus = collected <= 0 ? 'unpaid' : collected < o.total ? 'partial' : 'paid';
     return { orderId: o.id, total: o.total, collected, status };
   });
   const totalOrdered = sorted.reduce((s, o) => s + o.total, 0);
+  const totalPaid = payments.reduce((s, p) => s + Math.max(0, p.amount), 0);
   return {
     allocations,
-    receivable: Math.max(0, totalOrdered - collected0),
-    prepaid: Math.max(0, collected0 - totalOrdered),
+    receivable: Math.max(0, totalOrdered - totalPaid),
+    prepaid: Math.max(0, totalPaid - totalOrdered),
   };
 }

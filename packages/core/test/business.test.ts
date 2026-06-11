@@ -84,45 +84,67 @@ describe('应收余额 = 应收子科目余额（从分录聚合）', () => {
   });
 });
 
-describe('allocateCustomerPayments（FIFO 应收状态）', () => {
+describe('allocateCustomerPayments（按单归属 + FIFO 顺延）', () => {
   const o = (id: string, total: number, date: string) => ({ id, total, date });
+  // 未指定 orderId 的整笔收款（等价旧的「累计已收」FIFO 行为）
+  const pool = (amount: number) => [{ orderId: null, amount }];
 
   it('未收：collected=0 全部 unpaid，应收=总额', () => {
-    const r = allocateCustomerPayments([o('a', 10000, '2026-06-01')], 0);
+    const r = allocateCustomerPayments([o('a', 10000, '2026-06-01')], pool(0));
     expect(r.allocations[0]!.status).toBe('unpaid');
     expect(r.receivable).toBe(10000);
     expect(r.prepaid).toBe(0);
   });
 
   it('部分收：单笔收一半 → partial，应收=余款', () => {
-    const r = allocateCustomerPayments([o('a', 10000, '2026-06-01')], 8000);
+    const r = allocateCustomerPayments([o('a', 10000, '2026-06-01')], pool(8000));
     expect(r.allocations[0]).toMatchObject({ collected: 8000, status: 'partial' });
     expect(r.receivable).toBe(2000);
   });
 
   it('已收清：收满 → paid', () => {
-    const r = allocateCustomerPayments([o('a', 10000, '2026-06-01')], 10000);
+    const r = allocateCustomerPayments([o('a', 10000, '2026-06-01')], pool(10000));
     expect(r.allocations[0]!.status).toBe('paid');
     expect(r.receivable).toBe(0);
     expect(r.prepaid).toBe(0);
   });
 
   it('多收：收款 > 总额 → 全部 paid + 预收 credit', () => {
-    const r = allocateCustomerPayments([o('a', 10000, '2026-06-01')], 12000);
+    const r = allocateCustomerPayments([o('a', 10000, '2026-06-01')], pool(12000));
     expect(r.allocations[0]!.status).toBe('paid');
     expect(r.receivable).toBe(0);
     expect(r.prepaid).toBe(2000);
   });
 
-  it('FIFO：先还最早的单，多付滚到后续单', () => {
-    // 两单 ¥100 + ¥50，共收 ¥120 → 早单还清(100)、晚单部分(20)、欠 30
-    const r = allocateCustomerPayments([o('late', 5000, '2026-06-05'), o('early', 10000, '2026-06-01')], 12000);
+  it('未指定收款按 FIFO 顺延：先还最早的单，多付滚到后续单', () => {
+    // 两单 ¥100 + ¥50，未指定共收 ¥120 → 早单还清(100)、晚单部分(20)、欠 30
+    const r = allocateCustomerPayments([o('late', 5000, '2026-06-05'), o('early', 10000, '2026-06-01')], pool(12000));
     const early = r.allocations.find((a) => a.orderId === 'early')!;
     const late = r.allocations.find((a) => a.orderId === 'late')!;
     expect(early).toMatchObject({ collected: 10000, status: 'paid' });
     expect(late).toMatchObject({ collected: 2000, status: 'partial' });
     expect(r.receivable).toBe(3000);
-    // 分摊按日期升序：early 在前
     expect(r.allocations.map((a) => a.orderId)).toEqual(['early', 'late']);
+  });
+
+  it('收款按订单归属：指定单收款只记到该单，不串到别的单（复现用户 bug）', () => {
+    // early ¥100（先开、未收）、late ¥50（后开）。只在 late 上收 ¥50。
+    const orders = [o('early', 10000, '2026-06-01'), o('late', 5000, '2026-06-05')];
+    const r = allocateCustomerPayments(orders, [{ orderId: 'late', amount: 5000 }]);
+    expect(r.allocations.find((a) => a.orderId === 'late')).toMatchObject({ collected: 5000, status: 'paid' });
+    // 关键：early 不应被这笔串走，仍 unpaid 欠 ¥100（旧 FIFO 会把钱记到 early）
+    expect(r.allocations.find((a) => a.orderId === 'early')).toMatchObject({ collected: 0, status: 'unpaid' });
+    expect(r.receivable).toBe(10000);
+    expect(r.prepaid).toBe(0);
+  });
+
+  it('指定单多付：超出部分顺延到别单（FIFO），再剩才是预收', () => {
+    // early ¥100、late ¥50。在 late 上收 ¥130（超 late 本身 ¥80）→ late 收清，余 80 顺延 early。
+    const orders = [o('early', 10000, '2026-06-01'), o('late', 5000, '2026-06-05')];
+    const r = allocateCustomerPayments(orders, [{ orderId: 'late', amount: 13000 }]);
+    expect(r.allocations.find((a) => a.orderId === 'late')).toMatchObject({ collected: 5000, status: 'paid' });
+    expect(r.allocations.find((a) => a.orderId === 'early')).toMatchObject({ collected: 8000, status: 'partial' });
+    expect(r.receivable).toBe(2000); // early 还欠 20
+    expect(r.prepaid).toBe(0);
   });
 });
