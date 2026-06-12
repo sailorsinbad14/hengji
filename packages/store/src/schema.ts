@@ -1,9 +1,10 @@
-import type { Account, Book, OrderLine, Posting, SettlementDirection, CounterpartyType, OrderStatus } from '@app/core';
+import type { Account, Book, InventoryKind, OrderLine, Posting, SettlementDirection, CounterpartyType, OrderStatus } from '@app/core';
 import type {
   StoredAccount,
   StoredBook,
   StoredBudget,
   StoredCustomer,
+  StoredInventoryMovement,
   StoredOrder,
   StoredProduct,
   StoredReconciliation,
@@ -142,6 +143,21 @@ export interface ReconciliationRow {
   statement_balance: number;
   statement_date: string;
   completed_at: string;
+  created_at: string;
+  updated_at: string;
+  deleted: number;
+}
+export interface InventoryMovementRow {
+  id: string;
+  book_id: string;
+  product_id: string;
+  date: string;
+  kind: string;
+  qty: number;
+  unit_cost: number;
+  order_id: string | null;
+  txn_id: string | null;
+  note: string;
   created_at: string;
   updated_at: string;
   deleted: number;
@@ -290,6 +306,24 @@ export function toReconciliation(r: ReconciliationRow): StoredReconciliation {
     statementBalance: r.statement_balance,
     statementDate: r.statement_date,
     completedAt: r.completed_at,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deleted: r.deleted !== 0,
+  };
+}
+
+export function toInventoryMovement(r: InventoryMovementRow): StoredInventoryMovement {
+  return {
+    id: r.id,
+    bookId: r.book_id,
+    productId: r.product_id,
+    date: r.date,
+    kind: r.kind as InventoryKind,
+    qty: r.qty,
+    unitCost: r.unit_cost,
+    orderId: r.order_id,
+    txnId: r.txn_id,
+    note: r.note,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     deleted: r.deleted !== 0,

@@ -5,6 +5,7 @@ import {
   collectionEntry,
   expandEntry,
   incomeExpense,
+  inventoryState,
   netWorth,
   orderRevenueEntry,
   orderTotal,
@@ -445,6 +446,23 @@ export function runRepositoryContract(name: string, makeRepo: (now: Clock) => Re
       });
       const got = await repo.getOrder('o1');
       expect(got!.lines.map((l) => l.productId)).toEqual(['p1', null]);
+    });
+
+    it('库存出入库流水：add + list 过滤 + 同账本校验；core 聚合在手数量/均价', async () => {
+      const repo = await seed(makeRepo(fakeClock()));
+      await repo.addProduct(prod('p1', B2, 'A型工具', 8000, 12500, true));
+      await repo.addInventoryMovement({ id: 'm1', bookId: B2, productId: 'p1', date: '2026-06-01', kind: 'in', qty: 10, unitCost: 8000, orderId: null, txnId: 't1', note: '进货' });
+      await repo.addInventoryMovement({ id: 'm2', bookId: B2, productId: 'p1', date: '2026-06-02', kind: 'out', qty: -3, unitCost: 8000, orderId: 'o1', txnId: 't2', note: '' });
+      const all = await repo.listInventoryMovements({ bookId: B2, productId: 'p1' });
+      expect(all.map((m) => m.id).sort()).toEqual(['m1', 'm2']);
+      expect((await repo.listInventoryMovements({ orderId: 'o1' })).map((m) => m.id)).toEqual(['m2']);
+      // core 回放：在手 7 个、均价 ¥80、库存值 ¥560
+      const st = inventoryState(all);
+      expect(st).toEqual({ qty: 7, totalCost: 56000, avgCost: 8000 });
+      // 商品不在本账本 → 拒绝
+      await expect(
+        repo.addInventoryMovement({ id: 'm3', bookId: B1, productId: 'p1', date: '2026-06-03', kind: 'in', qty: 1, unitCost: 8000, orderId: null, txnId: null, note: '' }),
+      ).rejects.toThrow();
     });
   });
 

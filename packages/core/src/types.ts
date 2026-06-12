@@ -178,3 +178,29 @@ export interface Reconciliation {
   /** 完成时间 ISO */
   completedAt: string;
 }
+
+/** 出入库类型：in=进货/补货（+），out=订单出库（−），adjust=盘点调整（±）。 */
+export type InventoryKind = 'in' | 'out' | 'adjust';
+
+/**
+ * 库存出入库流水（v0.2 C2 期）：库存品的在手数量与移动加权均价**不存死值**，全部由流水回放聚合
+ * （见 ARCHITECTURE「库存」）。in 记进价；out 记出库时点的移动加权均价（结转营业成本用）。
+ * 库存成本以人民币本位计（库存商品/营业成本为 CNY 科目）。
+ */
+export interface InventoryMovement {
+  id: string;
+  bookId: string;
+  productId: string;
+  /** 发生日期 YYYY-MM-DD */
+  date: string;
+  kind: InventoryKind;
+  /** 有符号数量：in 为正、out 为负（与 kind 一致） */
+  qty: number;
+  /** 单位成本（人民币最小单位/分）：in=进价，out=出库时点移动加权均价 */
+  unitCost: Minor;
+  /** 关联订单（out 由订单完成产生）；进货为 null */
+  orderId: string | null;
+  /** 生成的复式分录 id（进货=借库存/贷资产；出库=借营业成本/贷库存） */
+  txnId: string | null;
+  note: string;
+}

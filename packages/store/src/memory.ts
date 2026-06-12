@@ -1,5 +1,5 @@
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Customer, Order, OrderStatus, Product, Reconciliation, Settlement, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Product, Reconciliation, Settlement, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
@@ -13,6 +13,7 @@ import type {
   StoredBook,
   StoredBudget,
   StoredCustomer,
+  StoredInventoryMovement,
   StoredOrder,
   StoredProduct,
   StoredReconciliation,
@@ -46,6 +47,7 @@ export class InMemoryRepository implements Repository {
   private readonly products = new Map<string, StoredProduct>();
   private readonly settings = new Map<string, StoredSetting>();
   private readonly reconciliations = new Map<string, StoredReconciliation>();
+  private readonly inventoryMovements = new Map<string, StoredInventoryMovement>();
   private readonly now: Clock;
 
   constructor(opts: { now?: Clock } = {}) {
@@ -373,6 +375,33 @@ export class InMemoryRepository implements Repository {
     const updated: StoredProduct = { ...p, ...patch, updatedAt: this.now() };
     this.products.set(id, updated);
     return clone(updated);
+  }
+
+  // ---- 生意：库存出入库 ----
+  async addInventoryMovement(m: InventoryMovement): Promise<StoredInventoryMovement> {
+    if (this.inventoryMovements.has(m.id)) throw new Error(`库存流水已存在：${m.id}`);
+    this.liveBook(m.bookId);
+    const prod = this.products.get(m.productId);
+    if (!prod || prod.deleted) throw new Error(`商品不存在：${m.productId}`);
+    if (prod.bookId !== m.bookId) throw new Error('库存流水的商品必须与流水同账本');
+    const ts = this.now();
+    const stored: StoredInventoryMovement = { ...clone(m), createdAt: ts, updatedAt: ts, deleted: false };
+    this.inventoryMovements.set(m.id, stored);
+    return clone(stored);
+  }
+
+  async listInventoryMovements(
+    query: { bookId?: string; productId?: string; orderId?: string } = {},
+  ): Promise<StoredInventoryMovement[]> {
+    const out: StoredInventoryMovement[] = [];
+    for (const m of this.inventoryMovements.values()) {
+      if (m.deleted) continue;
+      if (query.bookId && m.bookId !== query.bookId) continue;
+      if (query.productId && m.productId !== query.productId) continue;
+      if (query.orderId && m.orderId !== query.orderId) continue;
+      out.push(clone(m));
+    }
+    return sortByDateDesc(out);
   }
 
   // ---- 设置（KV）----

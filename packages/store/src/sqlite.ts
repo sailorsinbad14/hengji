@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Customer, Order, OrderStatus, Posting, Product, Reconciliation, Settlement, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Posting, Product, Reconciliation, Settlement, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
@@ -14,6 +14,7 @@ import type {
   StoredBook,
   StoredBudget,
   StoredCustomer,
+  StoredInventoryMovement,
   StoredOrder,
   StoredProduct,
   StoredReconciliation,
@@ -29,6 +30,7 @@ import {
   toBook,
   toBudget,
   toCustomer,
+  toInventoryMovement,
   toOrder,
   toOrderLine,
   toPosting,
@@ -43,6 +45,7 @@ import type {
   BookRow,
   BudgetRow,
   CustomerRow,
+  InventoryMovementRow,
   OrderLineRow,
   OrderRow,
   PostingRow,
@@ -645,6 +648,51 @@ export class SqliteRepository implements Repository {
       .prepare(`UPDATE products SET name=?, cost_price=?, sale_price=?, is_stock=?, unit=?, archived=?, updated_at=? WHERE id=?`)
       .run(next.name, next.costPrice, next.salePrice, next.isStock ? 1 : 0, next.unit, next.archived ? 1 : 0, next.updatedAt, id);
     return (await this.getProduct(id))!;
+  }
+
+  // ---- 生意：库存出入库 ----
+  async addInventoryMovement(m: InventoryMovement): Promise<StoredInventoryMovement> {
+    if (this.db.prepare('SELECT 1 FROM inventory_movements WHERE id = ?').get(m.id)) {
+      throw new Error(`库存流水已存在：${m.id}`);
+    }
+    this.assertBook(m.bookId);
+    const p = this.db.prepare('SELECT book_id FROM products WHERE id = ? AND deleted = 0').get(m.productId) as
+      | { book_id: string }
+      | undefined;
+    if (!p) throw new Error(`商品不存在：${m.productId}`);
+    if (p.book_id !== m.bookId) throw new Error('库存流水的商品必须与流水同账本');
+    const ts = this.now();
+    this.db
+      .prepare(
+        `INSERT INTO inventory_movements (id, book_id, product_id, date, kind, qty, unit_cost, order_id, txn_id, note, created_at, updated_at, deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      )
+      .run(m.id, m.bookId, m.productId, m.date, m.kind, m.qty, m.unitCost, m.orderId, m.txnId, m.note, ts, ts);
+    const r = this.db.prepare('SELECT * FROM inventory_movements WHERE id = ?').get(m.id) as InventoryMovementRow | undefined;
+    return toInventoryMovement(r!);
+  }
+
+  async listInventoryMovements(
+    query: { bookId?: string; productId?: string; orderId?: string } = {},
+  ): Promise<StoredInventoryMovement[]> {
+    const cond = ['deleted = 0'];
+    const params: string[] = [];
+    if (query.bookId) {
+      cond.push('book_id = ?');
+      params.push(query.bookId);
+    }
+    if (query.productId) {
+      cond.push('product_id = ?');
+      params.push(query.productId);
+    }
+    if (query.orderId) {
+      cond.push('order_id = ?');
+      params.push(query.orderId);
+    }
+    const rows = this.db
+      .prepare(`SELECT * FROM inventory_movements WHERE ${cond.join(' AND ')} ORDER BY date DESC, created_at DESC, id DESC`)
+      .all(...params) as unknown as InventoryMovementRow[];
+    return rows.map(toInventoryMovement);
   }
 
   // ---- 设置（KV）----

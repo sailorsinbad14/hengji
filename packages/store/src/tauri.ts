@@ -1,6 +1,6 @@
 import Database from '@tauri-apps/plugin-sql';
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Customer, Order, OrderStatus, Posting, Product, Reconciliation, Settlement, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Posting, Product, Reconciliation, Settlement, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
@@ -14,6 +14,7 @@ import type {
   StoredBook,
   StoredBudget,
   StoredCustomer,
+  StoredInventoryMovement,
   StoredOrder,
   StoredProduct,
   StoredReconciliation,
@@ -29,6 +30,7 @@ import {
   toBook,
   toBudget,
   toCustomer,
+  toInventoryMovement,
   toOrder,
   toOrderLine,
   toPosting,
@@ -43,6 +45,7 @@ import type {
   BookRow,
   BudgetRow,
   CustomerRow,
+  InventoryMovementRow,
   OrderLineRow,
   OrderRow,
   PostingRow,
@@ -631,6 +634,49 @@ export class TauriSqlRepository implements Repository {
       [next.name, next.costPrice, next.salePrice, next.isStock ? 1 : 0, next.unit, next.archived ? 1 : 0, next.updatedAt, id],
     );
     return (await this.getProduct(id))!;
+  }
+
+  // ---- 生意：库存出入库 ----
+  async addInventoryMovement(m: InventoryMovement): Promise<StoredInventoryMovement> {
+    if (await this.exists('SELECT 1 FROM inventory_movements WHERE id = $1', [m.id])) {
+      throw new Error(`库存流水已存在：${m.id}`);
+    }
+    await this.assertBook(m.bookId);
+    const rows = await this.db.select<{ book_id: string }[]>('SELECT book_id FROM products WHERE id = $1 AND deleted = 0', [m.productId]);
+    if (!rows[0]) throw new Error(`商品不存在：${m.productId}`);
+    if (rows[0].book_id !== m.bookId) throw new Error('库存流水的商品必须与流水同账本');
+    const ts = this.now();
+    await this.db.execute(
+      `INSERT INTO inventory_movements (id, book_id, product_id, date, kind, qty, unit_cost, order_id, txn_id, note, created_at, updated_at, deleted)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0)`,
+      [m.id, m.bookId, m.productId, m.date, m.kind, m.qty, m.unitCost, m.orderId, m.txnId, m.note, ts, ts],
+    );
+    const out = await this.db.select<InventoryMovementRow[]>('SELECT * FROM inventory_movements WHERE id = $1', [m.id]);
+    return toInventoryMovement(out[0]!);
+  }
+
+  async listInventoryMovements(
+    query: { bookId?: string; productId?: string; orderId?: string } = {},
+  ): Promise<StoredInventoryMovement[]> {
+    const cond = ['deleted = 0'];
+    const params: unknown[] = [];
+    if (query.bookId) {
+      params.push(query.bookId);
+      cond.push(`book_id = $${params.length}`);
+    }
+    if (query.productId) {
+      params.push(query.productId);
+      cond.push(`product_id = $${params.length}`);
+    }
+    if (query.orderId) {
+      params.push(query.orderId);
+      cond.push(`order_id = $${params.length}`);
+    }
+    const rows = await this.db.select<InventoryMovementRow[]>(
+      `SELECT * FROM inventory_movements WHERE ${cond.join(' AND ')} ORDER BY date DESC, created_at DESC, id DESC`,
+      params,
+    );
+    return rows.map(toInventoryMovement);
   }
 
   // ---- 设置（KV）----

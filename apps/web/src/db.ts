@@ -141,8 +141,24 @@ async function bootstrapDemo(): Promise<Repository> {
     { kind: 'expense', bookId: biz.book.id, date: daysAgo(2), amount: toMinor(120), accountId: biz.byName('对公账户'), categoryId: biz.byName('运费杂费'), payee: '快递费' },
   ];
   for (const e of bizEntries) await repo.addTransaction(expandEntry(e, genId));
-  await repo.addProduct({ id: genId(), bookId: biz.book.id, name: 'A型工具', costPrice: toMinor(80), salePrice: toMinor(125), isStock: true, unit: '个', archived: false });
-  await repo.addProduct({ id: genId(), bookId: biz.book.id, name: 'B型配件', costPrice: toMinor(20), salePrice: toMinor(50), isStock: true, unit: '个', archived: false });
+  const prodA = genId();
+  const prodB = genId();
+  await repo.addProduct({ id: prodA, bookId: biz.book.id, name: 'A型工具', costPrice: toMinor(80), salePrice: toMinor(125), isStock: true, unit: '个', archived: false });
+  await repo.addProduct({ id: prodB, bookId: biz.book.id, name: 'B型配件', costPrice: toMinor(20), salePrice: toMinor(50), isStock: true, unit: '个', archived: false });
+  // 库存（C2）：给两个库存品补货，展示在手/移动加权均价/库存值。库存商品 CNY 本位，钱从对公账户付。
+  const invAcctId = genId();
+  await repo.addAccount({ id: invAcctId, bookId: biz.book.id, name: '库存商品', type: 'asset', parentId: null, currency: 'CNY', archived: false });
+  const stockIn = async (productId: string, qty: number, costYuan: number, date: string): Promise<void> => {
+    const e = expandEntry(
+      { kind: 'transfer', bookId: biz.book.id, date, amount: Math.round(qty * toMinor(costYuan)), currency: 'CNY', fromAccountId: biz.byName('对公账户'), toAccountId: invAcctId, payee: '进货', note: '补货' },
+      genId,
+    );
+    await repo.addTransaction(e);
+    await repo.addInventoryMovement({ id: genId(), bookId: biz.book.id, productId, date, kind: 'in', qty, unitCost: toMinor(costYuan), orderId: null, txnId: e.id, note: '补货' });
+  };
+  await stockIn(prodA, 30, 80, daysAgo(15)); // A型工具 30 @ ¥80
+  await stockIn(prodA, 10, 90, daysAgo(8)); // 再补 10 @ ¥90 → 移动加权均价 ¥82.5
+  await stockIn(prodB, 50, 20, daysAgo(15)); // B型配件 50 @ ¥20
   // 一笔已完成但未收款的赊销——让「记账口径」切换在演示版可见：
   // 权责发生制本月收入含这 ¥1250，收付实现制不含（钱还没到账）。
   const custId = genId();

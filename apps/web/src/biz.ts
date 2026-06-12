@@ -1,5 +1,5 @@
-import { accountBalance, collectionEntry, convertAmount, orderRevenueEntry, orderTotal } from '@app/core';
-import type { ConvertCtx, Customer, Order } from '@app/core';
+import { accountBalance, collectionEntry, convertAmount, expandEntry, orderRevenueEntry, orderTotal } from '@app/core';
+import type { AccountType, ConvertCtx, Customer, Order } from '@app/core';
 import type { Repository, StoredAccount, StoredBook, StoredTransaction } from '@app/store';
 import { genId } from './db';
 
@@ -161,5 +161,64 @@ export async function recordCollection(
     accountId: opts.assetAccountId,
     note: opts.note,
     txnId: entry.id,
+  });
+}
+
+// —— C2 库存 ——
+// 库存以人民币本位计：库存商品(资产)/营业成本(费用)均为 CNY 科目；按需自动建（同 AR 的 ensure 模式）。
+const INVENTORY = '库存商品';
+const COGS = '营业成本';
+
+/** 找/建某顶层科目（按名+类型，CNY 本位容器），返回 id；已归档则恢复。 */
+async function ensureNamedAccount(repo: Repository, book: StoredBook, name: string, type: AccountType): Promise<string> {
+  const accounts = await repo.listAccounts({ bookId: book.id, includeArchived: true });
+  const found = accounts.find((a) => a.type === type && a.name === name && a.parentId === null);
+  if (found) {
+    if (found.archived) await repo.updateAccount(found.id, { archived: false });
+    return found.id;
+  }
+  const created = await repo.addAccount({ id: genId(), bookId: book.id, name, type, parentId: null, currency: 'CNY', archived: false });
+  return created.id;
+}
+
+/** 找/建「库存商品」资产科目（CNY）。 */
+export function ensureInventoryAccount(repo: Repository, book: StoredBook): Promise<string> {
+  return ensureNamedAccount(repo, book, INVENTORY, 'asset');
+}
+
+/** 找/建「营业成本」费用科目（CNY，出库结转 COGS 用）。 */
+export function ensureCogsAccount(repo: Repository, book: StoredBook): Promise<string> {
+  return ensureNamedAccount(repo, book, COGS, 'expense');
+}
+
+/**
+ * 进货 / 补库存：钱从付款账户(CNY)转入「库存商品」(借库存/贷资产)，并记一条 in 出入库流水(带进价)。
+ * 在手数量与均价由流水回放聚合，不存死值。库存为人民币本位，故付款账户须为 CNY。
+ */
+export async function recordStockIn(
+  repo: Repository,
+  book: StoredBook,
+  opts: { productId: string; qty: number; unitCost: number; date: string; payAccountId: string; note: string },
+): Promise<void> {
+  if (opts.qty <= 0) throw new Error('进货数量必须为正数');
+  const amount = Math.round(opts.qty * opts.unitCost); // CNY 最小单位
+  if (amount <= 0) throw new Error('进货金额为 0');
+  const invId = await ensureInventoryAccount(repo, book);
+  const entry = expandEntry(
+    { kind: 'transfer', bookId: book.id, date: opts.date, amount, currency: 'CNY', fromAccountId: opts.payAccountId, toAccountId: invId, payee: '进货', note: opts.note },
+    genId,
+  );
+  await repo.addTransaction(entry);
+  await repo.addInventoryMovement({
+    id: genId(),
+    bookId: book.id,
+    productId: opts.productId,
+    date: opts.date,
+    kind: 'in',
+    qty: opts.qty,
+    unitCost: opts.unitCost,
+    orderId: null,
+    txnId: entry.id,
+    note: opts.note,
   });
 }

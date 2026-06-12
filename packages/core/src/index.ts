@@ -7,3 +7,4 @@ export * from './seed';
 export * from './budget';
 export * from './business';
 export * from './reconcile';
+export * from './inventory';

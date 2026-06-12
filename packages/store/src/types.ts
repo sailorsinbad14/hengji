@@ -1,4 +1,4 @@
-import type { Account, Book, Budget, Customer, Order, OrderStatus, Product, Reconciliation, Settlement, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Product, Reconciliation, Settlement, Transaction } from '@app/core';
 
 /** 每条记录都带的同步元数据，为将来的云同步预留。 */
 export interface SyncMeta {
@@ -17,6 +17,7 @@ export type StoredOrder = Order & SyncMeta;
 export type StoredSettlement = Settlement & SyncMeta;
 export type StoredProduct = Product & SyncMeta;
 export type StoredReconciliation = Reconciliation & SyncMeta;
+export type StoredInventoryMovement = InventoryMovement & SyncMeta;
 
 /**
  * 通用设置项（KV）。scope = 'app' 为应用级，或某账本 id 为账本级。
@@ -139,6 +140,11 @@ export interface Repository {
   getProduct(id: string): Promise<StoredProduct | null>;
   listProducts(opts?: { bookId?: string; includeArchived?: boolean }): Promise<StoredProduct[]>;
   updateProduct(id: string, patch: ProductPatch): Promise<StoredProduct>;
+
+  // 库存出入库流水（v0.2 C2 期）：只追加、不改（盘点纠错另记一笔 adjust）。
+  // 在手数量/移动加权均价由 core inventoryState 回放流水聚合，不存死值。约束：商品须与流水同账本。
+  addInventoryMovement(m: InventoryMovement): Promise<StoredInventoryMovement>;
+  listInventoryMovements(query?: { bookId?: string; productId?: string; orderId?: string }): Promise<StoredInventoryMovement[]>;
 
   // 通用设置（KV）：scope='app' 或账本 id。setSetting 为 upsert（同 scope+key 覆盖）。
   getSetting(scope: string, key: string): Promise<StoredSetting | null>;

@@ -12,6 +12,7 @@
  * - m7：月度对账——postings 加 cleared 列（已核销标记）+ reconciliations 表（完成记录）。
  *   既有 posting 默认 cleared=0；纯新增列/表，不动既有数据。
  * - m8：订单结算币种 orders.currency（默认 'CNY'）；多币种业务 AR。既有订单回落 CNY。
+ * - m9：库存出入库流水 inventory_movements（C2 库存）；纯新增表，不动既有数据。
  */
 
 export interface SqlRunner {
@@ -213,7 +214,30 @@ const M7: string[] = [
 // 既有订单默认 'CNY'（与之前行为一致）。
 const M8: string[] = [`ALTER TABLE orders ADD COLUMN currency TEXT NOT NULL DEFAULT 'CNY'`];
 
-export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5, M6, M7, M8];
+// m9：库存出入库流水（C2）。in=进货(+)/out=订单出库(−)/adjust=盘点。在手数量与移动加权均价由
+// core 回放流水聚合，不存死值；unit_cost 人民币本位（in=进价，out=出库时点均价）。纯新增表。
+const M9: string[] = [
+  `CREATE TABLE IF NOT EXISTS inventory_movements (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL,
+    product_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    qty REAL NOT NULL,
+    unit_cost INTEGER NOT NULL,
+    order_id TEXT,
+    txn_id TEXT,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_inv_mov_book ON inventory_movements(book_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_inv_mov_product ON inventory_movements(product_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_inv_mov_order ON inventory_movements(order_id)`,
+];
+
+export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5, M6, M7, M8, M9];
 
 export async function migrate(r: SqlRunner): Promise<void> {
   const v = await r.getVersion();

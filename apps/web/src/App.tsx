@@ -14,10 +14,11 @@ import Accounts from './views/Accounts';
 import Customers from './views/Customers';
 import Orders from './views/Orders';
 import Products from './views/Products';
+import Inventory from './views/Inventory';
 import Reconcile from './views/Reconcile';
 import Settings from './views/Settings';
 
-type View = 'dashboard' | 'txns' | 'budgets' | 'invest' | 'accounts' | 'reconcile' | 'customers' | 'orders' | 'products';
+type View = 'dashboard' | 'txns' | 'budgets' | 'invest' | 'accounts' | 'reconcile' | 'customers' | 'orders' | 'products' | 'inventory';
 /** 顶层导航：财务总表 / 全局设置 / 某账本 id。 */
 const OVERVIEW = 'all';
 const SETTINGS = '__settings__';
@@ -52,6 +53,7 @@ const TABS: Record<BookType, Array<[View, string]>> = {
     ['orders', '订单'],
     ['customers', '客户'],
     ['products', '商品'],
+    ['inventory', '库存'],
     ['txns', '流水'],
     ['budgets', '预算'],
     ['accounts', '账户'],
@@ -284,6 +286,7 @@ export default function App() {
             {view === 'customers' && <Customers data={data} />}
             {view === 'orders' && <Orders data={data} />}
             {view === 'products' && <Products data={data} />}
+            {view === 'inventory' && <Inventory data={data} />}
           </>
         )}
       </main>
