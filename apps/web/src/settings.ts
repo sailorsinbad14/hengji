@@ -62,6 +62,12 @@ export function reconcileWindowOpen(today: Date, day: string, lead: number): boo
   return t >= start && t <= end;
 }
 
+// —— 多币种开关（app 级）——默认关：纯人民币 UI，隐藏币种管理与账户币种选择 ——
+export const MULTICURRENCY_KEY = 'multiCurrency';
+export function multiCurrencyOn(settings: StoredSetting[]): boolean {
+  return settings.find((s) => s.scope === APP_SCOPE && s.key === MULTICURRENCY_KEY)?.value === 'on';
+}
+
 // —— 多币种币种注册表（app 级，全局共用，用户自管）——
 /** 自定义币种存 app 级 JSON 数组（不含 CNY）：[{code,symbol,name,decimals,rate}, …]。 */
 export const CURRENCIES_KEY = 'currencies';

@@ -40,8 +40,8 @@ export default function Accounts({ data }: { data: AppData }) {
   }, [book.id]);
 
   const usable = all.filter((a) => !a.deleted);
-  // 仅资产/负债账户可选币种（单币种）；收入/支出/权益分类沿用人民币（跨币聚合在报表折算）
-  const currencyMatters = newType === 'asset' || newType === 'liability';
+  // 仅开启多币种 + 资产/负债账户才可选币种；其余沿用人民币
+  const currencyMatters = data.mcEnabled && (newType === 'asset' || newType === 'liability');
 
   async function add(): Promise<void> {
     setErr(null);

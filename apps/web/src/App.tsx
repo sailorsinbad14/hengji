@@ -4,7 +4,7 @@ import type { AccountingBasis, BookType, ConvertCtx } from '@app/core';
 import type { Repository, StoredAccount, StoredBook, StoredBudget, StoredSetting, StoredTransaction } from '@app/store';
 import { BOOK_META, createBookWithChart, isDesktop, ready } from './db';
 import { fmtMoney, setCurrencyRegistry } from './format';
-import { basisOf, convertCtxOf, currenciesOf, reconcileDayOf, reconcileLeadOf, reconcileTargetDate, reconcileWindowOpen } from './settings';
+import { basisOf, convertCtxOf, currenciesOf, multiCurrencyOn, reconcileDayOf, reconcileLeadOf, reconcileTargetDate, reconcileWindowOpen } from './settings';
 import OverviewAll from './views/OverviewAll';
 import Dashboard from './views/Dashboard';
 import Transactions from './views/Transactions';
@@ -34,6 +34,8 @@ export interface AppData {
   basis: AccountingBasis;
   /** 多币种折算上下文（展示币种 + 汇率表，app 级全局） */
   convert: ConvertCtx;
+  /** 多币种开关（关时隐藏账户币种选择等） */
+  mcEnabled: boolean;
   reload: () => Promise<void>;
 }
 
@@ -152,8 +154,9 @@ export default function App() {
     openBook('all');
   }
 
+  const mcEnabled = multiCurrencyOn(settings);
   const data: AppData | null = curBook
-    ? { repo, book: curBook, ...scoped, basis, convert, reload: () => loadFrom(repo) }
+    ? { repo, book: curBook, ...scoped, basis, convert, mcEnabled, reload: () => loadFrom(repo) }
     : null;
   const tabs = curBook ? TABS[curBook.type] : [];
   const showReminder = reconReminder && curBook && !reconDismissed.has(curBook.id);

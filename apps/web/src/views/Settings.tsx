@@ -6,10 +6,12 @@ import {
   APP_SCOPE,
   BASIS_KEY,
   CURRENCIES_KEY,
+  MULTICURRENCY_KEY,
   RECON_DAY_KEY,
   RECON_LEAD_KEY,
   basisOf,
   currenciesOf,
+  multiCurrencyOn,
   reconcileDayOf,
   reconcileLeadOf,
 } from '../settings';
@@ -36,6 +38,7 @@ export default function Settings({
   const basis = basisOf(settings);
   const reconDay = reconcileDayOf(settings);
   const reconLead = reconcileLeadOf(settings);
+  const mc = multiCurrencyOn(settings);
   const custom = currenciesOf(settings).filter((c) => c.code !== 'CNY');
   const [saving, setSaving] = useState(false);
   const [nc, setNc] = useState(emptyNew);
@@ -162,12 +165,20 @@ export default function Settings({
       </div>
 
       <div className="card">
-        <h3>币种</h3>
-        <p className="muted small">
-          自定义币种（代码 / 符号 / 名称 / 小数位 / 对人民币汇率）。多币种账户在财务总表按币种分组、用汇率折合人民币展示。
-          人民币是本位币、固定不可改。
-        </p>
-        <div className="cur-table">
+        <h3>多币种</h3>
+        <label className="chkline" style={{ marginBottom: 6 }}>
+          <input type="checkbox" checked={mc} onChange={(e) => void save(MULTICURRENCY_KEY, e.target.checked ? 'on' : 'off')} disabled={saving} />
+          开启多币种（可添加美元 / 日元 / 比特币等币种，建账户时选币种）
+        </label>
+        <p className="muted small">关闭时全部按人民币，账户与报表不出现币种选项。只用人民币的话保持关闭即可。</p>
+
+        {mc && (
+          <>
+            <p className="muted small">
+              自定义币种（代码 / 符号 / 名称 / 小数位 / 对人民币汇率）。多币种账户在财务总表按币种分组、用汇率折合人民币展示。
+              人民币是本位币、固定不可改。
+            </p>
+            <div className="cur-table">
           <div className="cur-head">
             <span>代码</span>
             <span>符号</span>
@@ -220,6 +231,8 @@ export default function Settings({
           </button>
         </div>
         {err && <p className="form-err">{err}</p>}
+          </>
+        )}
       </div>
     </>
   );

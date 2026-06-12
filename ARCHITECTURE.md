@@ -56,6 +56,7 @@
 
 **✅ Phase 1 已落地（2 位法币 CNY/USD/EUR/HKD/GBP）**：core `assertBalanced`/`isBalanced` 改按币种分组（单币种求和=0、多币种=换汇豁免）；reports `convertAmount`/`balancesByCurrency` + `netWorth`/`incomeExpense` 加可选 `convert`（不传=原样、向后兼容）。web：`fmtMoney(minor,currency)` 符号感知；账户新建币种下拉（仅资产/负债）；QuickEntry 分录币种跟随账户、跨币转账暂拦截；设置页「汇率表」(app 级，币种→对 CNY 汇率)；Dashboard/财务总表净资产折合 CNY + 按币种分组 chip；侧栏/流水按原币符号显示。
 **✅ Phase 2a 换汇录入已落地**：core `forexEntry`(两条原币腿、不自动记汇损、多币种豁免平衡)；QuickEntry 转账选不同币种账户→自动变换汇(汇出+到账两个原币金额)、走 forexEntry；`describeTxn` 换汇用 💱 显示两腿原币。汇损/益隐含在原币余额差、仅折算总值时体现。
+**✅ 多币种开关（默认关）**：设置页「多币种」卡顶部开关(app 级 `multiCurrency`，默认关)。关时纯人民币 UI——隐藏币种管理表 + 建账户的币种选择(`AppData.mcEnabled` 门控 Accounts 币种下拉)。展示层(折合/分组 chip)本就按实际数据自适应，纯 CNY 用户自然不出现；已有外币数据即便关也如实显示(关只藏控件不强转数据)。演示版 seed 开关=on 展示多币种。
 **✅ Phase 2b 用户自管币种 + 可变精度已落地**：币种改为**用户自管注册表**(app 级 setting `currencies` JSON 数组 [{code,symbol,name,decimals,rate}]，CNY 本位恒在不可删)。设置页「币种」卡可增/删/改名改符号改小数位改汇率(在用币种禁删、禁改小数位——防错读已记金额)。`format.ts` 模块级注册表 + `setCurrencyRegistry`(App 加载设置后注入) + `currencyDef`/`currencyList`/`fmtMoney`(按币种符号+小数位)。**可变精度**：`ConvertCtx` 加 `scales`，`convertAmount` 跨小数位折算 `round(minor×rate×10^(sD−sF))`；toMinor 按币种 decimals(QuickEntry/Reconcile)。实测 BTC(8位 ₿0.05)/JPY(0位 JP¥)/USD(2位)同总表折合正确。
 **⏳ Phase 2 剩余**：展示币种可切换(目前固定 CNY)；多币子账户 parentId 分组显示；业务账本 AR 多币种。
 

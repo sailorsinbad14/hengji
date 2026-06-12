@@ -94,7 +94,8 @@ async function bootstrapDemo(): Promise<Repository> {
   await repo.addBudget({ id: genId(), bookId: me.book.id, accountId: me.byName('餐饮'), monthlyLimit: toMinor(1000) });
   await repo.addBudget({ id: genId(), bookId: me.book.id, accountId: me.byName('交通'), monthlyLimit: toMinor(300) });
   await repo.addBudget({ id: genId(), bookId: me.book.id, accountId: me.byName('购物'), monthlyLimit: toMinor(300) });
-  // 多币种演示：自定义币种注册表（美元 2 位 / 比特币 8 位）+ 两个外币账户
+  // 多币种演示：开关打开（默认关）+ 自定义币种注册表（美元 2 位 / 比特币 8 位）+ 两个外币账户
+  await repo.setSetting('app', 'multiCurrency', 'on');
   await repo.setSetting(
     'app',
     'currencies',
