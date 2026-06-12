@@ -114,8 +114,12 @@ export default function App() {
     [accounts, txns, budgets, cur],
   );
 
+  // 多币种生效值：开关开 **或** 持有任一外币账户（accounts 已排除归档）。
+  // 持有外币数据时强制视为开启——否则「关却仍显示外币」自相矛盾；要回纯人民币须先归档所有外币账户。
+  const mcEnabled = multiCurrencyOn(settings) || accounts.some((a) => a.currency !== 'CNY');
+
   // 全局设置（app 级，对所有账本生效）；在任何提前 return 之前调用，保证 Hook 顺序稳定。
-  const convert = useMemo(() => convertCtxOf(settings), [settings]);
+  const convert = useMemo(() => convertCtxOf(settings, mcEnabled), [settings, mcEnabled]);
   const basis = useMemo(() => basisOf(settings), [settings]);
 
   // 对账提醒：全局配置对账日 + 进入提前窗口 + 当前账本仍有未核销分录（已对账则不扰）。
@@ -156,7 +160,6 @@ export default function App() {
     openBook('all');
   }
 
-  const mcEnabled = multiCurrencyOn(settings);
   const data: AppData | null = curBook
     ? { repo, book: curBook, ...scoped, basis, convert, mcEnabled, reload: () => loadFrom(repo) }
     : null;

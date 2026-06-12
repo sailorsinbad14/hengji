@@ -112,8 +112,11 @@ export function currenciesOf(settings: StoredSetting[]): CurrencyDef[] {
   return [CNY_BASE, ...custom];
 }
 
-/** 折算上下文（展示币种 + 各币种汇率/小数位），从币种注册表派生。 */
-export function convertCtxOf(settings: StoredSetting[]): ConvertCtx {
+/**
+ * 折算上下文（展示币种 + 各币种汇率/小数位），从币种注册表派生。
+ * multiCurrency 传**生效值**（持有外币账户时强制为 true，见 App.mcEnabled）——未开启时强制人民币展示。
+ */
+export function convertCtxOf(settings: StoredSetting[], multiCurrency: boolean = multiCurrencyOn(settings)): ConvertCtx {
   const defs = currenciesOf(settings);
   const rates: Record<string, number> = {};
   const scales: Record<string, number> = {};
@@ -121,7 +124,6 @@ export function convertCtxOf(settings: StoredSetting[]): ConvertCtx {
     rates[d.code] = d.rate;
     scales[d.code] = d.decimals;
   }
-  // 多币种关闭时强制人民币展示（「关只藏控件不强转」），开启时按用户所选展示币种折算。
-  const display = multiCurrencyOn(settings) ? displayCurrencyOf(settings) : DEFAULT_DISPLAY_CURRENCY;
+  const display = multiCurrency ? displayCurrencyOf(settings) : DEFAULT_DISPLAY_CURRENCY;
   return { rates, scales, display };
 }

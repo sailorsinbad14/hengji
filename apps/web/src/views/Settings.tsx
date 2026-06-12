@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { AccountingBasis } from '@app/core';
 import type { Repository, StoredSetting } from '@app/store';
+import { currencyDef } from '../format';
 import type { CurrencyDef } from '../format';
 import {
   APP_SCOPE,
@@ -40,7 +41,10 @@ export default function Settings({
   const basis = basisOf(settings);
   const reconDay = reconcileDayOf(settings);
   const reconLead = reconcileLeadOf(settings);
-  const mc = multiCurrencyOn(settings);
+  // 持有外币账户 → 多币种锁定为开（关却仍显示外币=自相矛盾）；归档所有外币账户后才能切回纯人民币。
+  const foreignInUse = [...usedCurrencies].filter((c) => c !== 'CNY');
+  const hasForeignData = foreignInUse.length > 0;
+  const mc = multiCurrencyOn(settings) || hasForeignData;
   const allCurrencies = currenciesOf(settings); // CNY 在首 + 自定义
   const custom = allCurrencies.filter((c) => c.code !== 'CNY');
   const displayCur = displayCurrencyOf(settings);
@@ -172,10 +176,22 @@ export default function Settings({
       <div className="card">
         <h3>多币种</h3>
         <label className="chkline" style={{ marginBottom: 6 }}>
-          <input type="checkbox" checked={mc} onChange={(e) => void save(MULTICURRENCY_KEY, e.target.checked ? 'on' : 'off')} disabled={saving} />
+          <input
+            type="checkbox"
+            checked={mc}
+            onChange={(e) => void save(MULTICURRENCY_KEY, e.target.checked ? 'on' : 'off')}
+            disabled={saving || hasForeignData}
+          />
           开启多币种（可添加美元 / 日元 / 比特币等币种，建账户时选币种）
         </label>
-        <p className="muted small">关闭时全部按人民币，账户与报表不出现币种选项。只用人民币的话保持关闭即可。</p>
+        {hasForeignData ? (
+          <p className="muted small">
+            已有外币账户在用（{foreignInUse.map((c) => currencyDef(c).name).join('、')}），多币种已锁定开启。
+            要回到纯人民币，请先到「账户」页归档所有外币账户。
+          </p>
+        ) : (
+          <p className="muted small">关闭时全部按人民币，账户与报表不出现币种选项。只用人民币的话保持关闭即可。</p>
+        )}
 
         {mc && (
           <>
