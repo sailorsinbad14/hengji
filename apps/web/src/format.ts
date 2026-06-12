@@ -1,26 +1,50 @@
-import { fromMinor } from '@app/core';
 import type { StoredAccount, StoredTransaction } from '@app/store';
 
-/** Phase 1 支持的币种（均 2 位小数）；可变精度（JPY/BTC）留 Phase 2。 */
-export const CURRENCIES = ['CNY', 'USD', 'EUR', 'HKD', 'GBP'] as const;
-export const CURRENCY_SYMBOL: Record<string, string> = { CNY: '¥', USD: '$', EUR: '€', HKD: 'HK$', GBP: '£' };
-export const CURRENCY_LABEL: Record<string, string> = {
-  CNY: '人民币 CNY',
-  USD: '美元 USD',
-  EUR: '欧元 EUR',
-  HKD: '港币 HKD',
-  GBP: '英镑 GBP',
-};
+/** 一个币种的展示定义：代码 / 符号 / 名称 / 小数位 / 对人民币汇率。 */
+export interface CurrencyDef {
+  code: string;
+  symbol: string;
+  name: string;
+  /** 最小单位小数位（CNY/USD=2、JPY=0、BTC=8…） */
+  decimals: number;
+  /** 1 单位该币种 = 多少人民币（CNY 自身=1） */
+  rate: number;
+}
 
-/** 金额格式化；默认人民币。币种决定符号（Phase 1 统一 2 位小数）。 */
+/** 本位/展示币种：人民币（恒在、不可删、汇率=1）。 */
+export const CNY_BASE: CurrencyDef = { code: 'CNY', symbol: '¥', name: '人民币', decimals: 2, rate: 1 };
+
+/**
+ * 模块级币种注册表（用户自管，存全局设置）。App 在加载设置后调用 setCurrencyRegistry 注入，
+ * 使 fmtMoney 等纯展示函数无需层层传参即可拿到符号/小数位。单客户端、改动罕见，可接受模块状态。
+ */
+let REGISTRY: Record<string, CurrencyDef> = { CNY: CNY_BASE };
+
+export function setCurrencyRegistry(defs: CurrencyDef[]): void {
+  const m: Record<string, CurrencyDef> = { CNY: CNY_BASE };
+  for (const d of defs) if (d.code !== 'CNY') m[d.code] = d;
+  REGISTRY = m;
+}
+
+/** 取币种定义；未注册的代码兜底为「代码当符号、2 位小数、汇率 1」。 */
+export function currencyDef(code: string): CurrencyDef {
+  return REGISTRY[code] ?? { code, symbol: `${code} `, name: code, decimals: 2, rate: 1 };
+}
+
+/** 当前全部币种（CNY 在首）。 */
+export function currencyList(): CurrencyDef[] {
+  return Object.values(REGISTRY);
+}
+
+/** 金额格式化；按币种符号 + 小数位（默认人民币）。 */
 export function fmtMoney(minor: number, currency = 'CNY'): string {
+  const d = currencyDef(currency);
   const sign = minor < 0 ? '−' : '';
-  const sym = CURRENCY_SYMBOL[currency] ?? `${currency} `;
-  const v = Math.abs(fromMinor(minor)).toLocaleString('zh-CN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+  const v = Math.abs(minor / 10 ** d.decimals).toLocaleString('zh-CN', {
+    minimumFractionDigits: d.decimals,
+    maximumFractionDigits: d.decimals,
   });
-  return `${sign}${sym}${v}`;
+  return `${sign}${d.symbol}${v}`;
 }
 
 /** 本地时区的 YYYY-MM-DD（不能用 toISOString——那是 UTC，晚上会跨天） */

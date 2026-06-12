@@ -1,6 +1,7 @@
 import type { AccountingBasis, ConvertCtx } from '@app/core';
 import type { StoredSetting } from '@app/store';
-import { localISO } from './format';
+import { CNY_BASE, localISO } from './format';
+import type { CurrencyDef } from './format';
 
 /**
  * 设置读取助手（web 层）：把通用 KV 设置翻译成有类型的取值。
@@ -61,31 +62,49 @@ export function reconcileWindowOpen(today: Date, day: string, lead: number): boo
   return t >= start && t <= end;
 }
 
-// —— 多币种汇率表（app 级，全局共用）——
-/** 各币种对展示币种(CNY)的汇率，存 app 级 JSON：{ "USD": 7.1, ... }。 */
-export const FX_RATES_KEY = 'fxRates';
-/** Phase 1 展示币种固定 CNY（切换留 Phase 2）。 */
+// —— 多币种币种注册表（app 级，全局共用，用户自管）——
+/** 自定义币种存 app 级 JSON 数组（不含 CNY）：[{code,symbol,name,decimals,rate}, …]。 */
+export const CURRENCIES_KEY = 'currencies';
+/** 展示币种固定 CNY（切换留后续）。 */
 export const DISPLAY_CURRENCY = 'CNY';
 
-/** 读汇率表（含展示币种自身=1）；坏数据降级为仅 {CNY:1}。 */
-export function fxRatesOf(settings: StoredSetting[]): Record<string, number> {
-  const rates: Record<string, number> = { [DISPLAY_CURRENCY]: 1 };
-  const row = settings.find((s) => s.scope === 'app' && s.key === FX_RATES_KEY);
+/** 读币种列表（CNY 在首 + 用户自定义）；逐项校验，坏数据丢弃。 */
+export function currenciesOf(settings: StoredSetting[]): CurrencyDef[] {
+  const custom: CurrencyDef[] = [];
+  const row = settings.find((s) => s.scope === APP_SCOPE && s.key === CURRENCIES_KEY);
   if (row) {
     try {
-      const parsed = JSON.parse(row.value) as Record<string, unknown>;
-      for (const [k, v] of Object.entries(parsed)) {
-        const n = Number(v);
-        if (Number.isFinite(n) && n > 0) rates[k] = n;
+      const arr = JSON.parse(row.value) as unknown;
+      if (Array.isArray(arr)) {
+        for (const c of arr as Array<Record<string, unknown>>) {
+          const code = typeof c.code === 'string' ? c.code.trim() : '';
+          if (!code || code === 'CNY') continue;
+          const rate = Number(c.rate);
+          const dec = Number(c.decimals);
+          custom.push({
+            code,
+            symbol: typeof c.symbol === 'string' && c.symbol ? c.symbol : code,
+            name: typeof c.name === 'string' && c.name ? c.name : code,
+            decimals: Number.isInteger(dec) && dec >= 0 && dec <= 8 ? dec : 2,
+            rate: Number.isFinite(rate) && rate > 0 ? rate : 1,
+          });
+        }
       }
     } catch {
       /* 坏 JSON 忽略 */
     }
   }
-  return rates;
+  return [CNY_BASE, ...custom];
 }
 
-/** 折算上下文（展示币种 + 汇率表）。 */
+/** 折算上下文（展示币种 + 各币种汇率/小数位），从币种注册表派生。 */
 export function convertCtxOf(settings: StoredSetting[]): ConvertCtx {
-  return { rates: fxRatesOf(settings), display: DISPLAY_CURRENCY };
+  const defs = currenciesOf(settings);
+  const rates: Record<string, number> = {};
+  const scales: Record<string, number> = {};
+  for (const d of defs) {
+    rates[d.code] = d.rate;
+    scales[d.code] = d.decimals;
+  }
+  return { rates, scales, display: DISPLAY_CURRENCY };
 }

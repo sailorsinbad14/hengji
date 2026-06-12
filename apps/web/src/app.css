@@ -269,16 +269,24 @@ input:focus, select:focus { outline: 2px solid var(--brand-50); border-color: va
 .rec-ok { color: var(--brand-700); font-size: 13px; margin-top: 8px; }
 
 /* 多币种 */
-.fx-grid { display: grid; gap: 10px; margin-top: 12px; }
-.fx-row { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-soft); }
-.fx-row > span:first-child { min-width: 130px; }
-.fx-input { display: inline-flex; align-items: center; gap: 6px; }
-.fx-input input { width: 110px; }
 .cur-breakdown { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .cur-chip {
   font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
   background: #eef1f5; color: var(--ink-soft); font-variant-numeric: tabular-nums;
 }
+
+/* 币种管理表 */
+.cur-table { margin: 12px 0; }
+.cur-head, .cur-row, .cur-add {
+  display: grid; grid-template-columns: 64px 70px 1fr 64px 90px 56px; gap: 8px; align-items: center;
+}
+.cur-head { font-size: 12px; color: var(--muted); padding: 0 2px 6px; }
+.cur-row { padding: 6px 2px; border-top: 1px solid var(--line); font-size: 13.5px; }
+.cur-row.muted { color: var(--muted); }
+.cur-row input { padding: 6px 8px; }
+.cur-code { font-weight: 700; font-variant-numeric: tabular-nums; }
+.cur-add { margin-top: 12px; }
+.cur-add input { padding: 6px 8px; }
 
 /* 滚动对账徽章（Dashboard 头部） */
 .recon-badge {

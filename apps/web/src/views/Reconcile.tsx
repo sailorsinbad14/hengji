@@ -3,7 +3,7 @@ import { accountBalance, adjustBalanceEntry, toMinor, unclearedCount } from '@ap
 import type { StoredReconciliation } from '@app/store';
 import type { AppData } from '../App';
 import { genId } from '../db';
-import { fmtMoney, todayISO } from '../format';
+import { currencyDef, fmtMoney, todayISO } from '../format';
 
 const GAIN_LOSS = '盘盈盘亏';
 
@@ -59,6 +59,10 @@ export default function Reconcile({ data }: { data: AppData }) {
     return out.sort((a, b) => (a.date !== b.date ? (a.date < b.date ? -1 : 1) : 0));
   }, [txns, accountId]);
 
+  // 对账账户的币种决定金额精度与显示符号（账户可为非人民币）
+  const curCode = recAccounts.find((a) => a.id === accountId)?.currency ?? 'CNY';
+  const dec = currencyDef(curCode).decimals;
+
   const currentBalance = useMemo(() => accountBalance(txns, accountId), [txns, accountId]);
   const checkedSum = useMemo(
     () => rows.reduce((s, r) => (checked.has(r.pid) ? s + r.amount : s), 0),
@@ -68,7 +72,7 @@ export default function Reconcile({ data }: { data: AppData }) {
   const stmtTrim = stmt.trim();
   const stmtNum = stmtTrim === '' ? null : Number(stmtTrim);
   const stmtValid = stmtNum !== null && Number.isFinite(stmtNum);
-  const stmtMinor = stmtValid ? toMinor(stmtNum) : null;
+  const stmtMinor = stmtValid ? toMinor(stmtNum, dec) : null;
   const diff = stmtMinor === null ? null : stmtMinor - checkedSum;
 
   function toggle(pid: string): void {
@@ -100,7 +104,7 @@ export default function Reconcile({ data }: { data: AppData }) {
       });
       await reload();
       const acctName = accounts.find((a) => a.id === accountId)?.name ?? '账户';
-      setMsg(`已完成对账：「${acctName}」余额与对账单 ${fmtMoney(stmtMinor!)} 相符，${checkedIds.length} 笔已核销。`);
+      setMsg(`已完成对账：「${acctName}」余额与对账单 ${fmtMoney(stmtMinor!, curCode)} 相符，${checkedIds.length} 笔已核销。`);
     } finally {
       setBusy(false);
     }
@@ -132,6 +136,7 @@ export default function Reconcile({ data }: { data: AppData }) {
           currentBalance: checkedSum,
           targetValue: stmtMinor!,
           counterAccountId: gl.id,
+          currency: curCode, // 调整腿按对账账户的币种
           note: '对账盘盈盘亏调整',
         },
         genId,
@@ -202,12 +207,12 @@ export default function Reconcile({ data }: { data: AppData }) {
           </label>
         </div>
         <div className="rec-hint muted small">
-          账户当前余额 {fmtMoney(currentBalance)}
+          账户当前余额 {fmtMoney(currentBalance, curCode)}
           {(() => {
             const n = unclearedCount(txns, accountId);
             return n > 0 ? <> · {n} 笔待核销</> : <> · 已全部核销 ✓</>;
           })()}
-          {lastRec && <> · 上次对账 {lastRec.statementDate}（{fmtMoney(lastRec.statementBalance)}）</>}
+          {lastRec && <> · 上次对账 {lastRec.statementDate}（{fmtMoney(lastRec.statementBalance, curCode)}）</>}
         </div>
       </div>
 
@@ -224,7 +229,7 @@ export default function Reconcile({ data }: { data: AppData }) {
                 <input type="checkbox" checked={checked.has(r.pid)} onChange={() => toggle(r.pid)} />
                 <span className="rec-date">{r.date}</span>
                 <span className="rec-title">{r.title}</span>
-                <span className={`rec-amt ${r.amount < 0 ? 'neg' : 'pos'}`}>{fmtMoney(r.amount)}</span>
+                <span className={`rec-amt ${r.amount < 0 ? 'neg' : 'pos'}`}>{fmtMoney(r.amount, curCode)}</span>
               </label>
             ))}
           </div>
@@ -233,15 +238,15 @@ export default function Reconcile({ data }: { data: AppData }) {
 
       <div className="card rec-foot">
         <div className="rec-tally">
-          <span>已勾选合计 <b>{fmtMoney(checkedSum)}</b></span>
+          <span>已勾选合计 <b>{fmtMoney(checkedSum, curCode)}</b></span>
           <span className={`rec-diff${diff === 0 ? ' ok' : ''}`}>
-            差额 <b>{diff === null ? '—' : fmtMoney(diff)}</b>
+            差额 <b>{diff === null ? '—' : fmtMoney(diff, curCode)}</b>
           </span>
         </div>
         <div className="rec-actions">
           {diff !== null && diff !== 0 && (
             <button className="btn" onClick={() => void adjust()} disabled={busy}>
-              记盘盈盘亏调整 {fmtMoney(diff)}
+              记盘盈盘亏调整 {fmtMoney(diff, curCode)}
             </button>
           )}
           <button className="btn btn-primary" onClick={() => void complete()} disabled={busy || diff !== 0}>

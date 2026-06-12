@@ -112,12 +112,24 @@ describe('reports', () => {
   });
 
   describe('多币种折算', () => {
-    const ctx: ConvertCtx = { rates: { USD: 7.1, CNY: 1 }, display: 'CNY' };
+    const ctx: ConvertCtx = { rates: { USD: 7.1, CNY: 1 }, scales: { USD: 2, CNY: 2 }, display: 'CNY' };
 
     it('convertAmount：原币 → 展示币（同 scale 按汇率乘，展示币自身=1）', () => {
       expect(convertAmount(100000, 'USD', ctx)).toBe(710000); // $1000 → ¥7100
       expect(convertAmount(500000, 'CNY', ctx)).toBe(500000); // 展示币不折
       expect(convertAmount(100000, 'JPY', ctx)).toBe(100000); // 缺汇率按 1 兜底
+    });
+
+    it('convertAmount：跨小数位（BTC 8 位 / JPY 0 位 → CNY 2 位）', () => {
+      const ctx2: ConvertCtx = {
+        rates: { BTC: 400000, JPY: 0.05, CNY: 1 },
+        scales: { BTC: 8, JPY: 0, CNY: 2 },
+        display: 'CNY',
+      };
+      // 0.05 BTC = 5,000,000 minor(scale8) → 0.05×400000=¥20,000 = 2,000,000 minor(scale2)
+      expect(convertAmount(5_000_000, 'BTC', ctx2)).toBe(2_000_000);
+      // ¥10000 日元 = 10000 minor(scale0) → 10000×0.05=¥500 = 50,000 minor(scale2)
+      expect(convertAmount(10_000, 'JPY', ctx2)).toBe(50_000);
     });
 
     // CNY 银行 ¥5000 + USD 账户 $1000 两个资产账户

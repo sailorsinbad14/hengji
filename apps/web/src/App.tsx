@@ -3,8 +3,8 @@ import { accountBalance, unclearedCount } from '@app/core';
 import type { AccountingBasis, BookType, ConvertCtx } from '@app/core';
 import type { Repository, StoredAccount, StoredBook, StoredBudget, StoredSetting, StoredTransaction } from '@app/store';
 import { BOOK_META, createBookWithChart, isDesktop, ready } from './db';
-import { fmtMoney } from './format';
-import { basisOf, convertCtxOf, reconcileDayOf, reconcileLeadOf, reconcileTargetDate, reconcileWindowOpen } from './settings';
+import { fmtMoney, setCurrencyRegistry } from './format';
+import { basisOf, convertCtxOf, currenciesOf, reconcileDayOf, reconcileLeadOf, reconcileTargetDate, reconcileWindowOpen } from './settings';
 import OverviewAll from './views/OverviewAll';
 import Dashboard from './views/Dashboard';
 import Transactions from './views/Transactions';
@@ -85,6 +85,7 @@ export default function App() {
       r.listBudgets(),
       r.listSettings(),
     ]);
+    setCurrencyRegistry(currenciesOf(s)); // 注入币种注册表，供 fmtMoney 等取符号/小数位
     setBooks(bk);
     setAccounts(a);
     setTxns(t);
@@ -233,7 +234,12 @@ export default function App() {
       </aside>
       <main className="main">
         {cur === SETTINGS ? (
-          <Settings repo={repo} settings={settings} convert={convert} reload={() => loadFrom(repo)} />
+          <Settings
+            repo={repo}
+            settings={settings}
+            usedCurrencies={new Set(accounts.map((a) => a.currency))}
+            reload={() => loadFrom(repo)}
+          />
         ) : cur === OVERVIEW || !data ? (
           <OverviewAll books={books} accounts={accounts} txns={txns} settings={settings} convert={convert} onOpen={openBook} />
         ) : (

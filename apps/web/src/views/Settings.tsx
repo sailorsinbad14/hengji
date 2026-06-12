@@ -1,14 +1,15 @@
 import { useState } from 'react';
-import type { AccountingBasis, ConvertCtx } from '@app/core';
+import type { AccountingBasis } from '@app/core';
 import type { Repository, StoredSetting } from '@app/store';
-import { CURRENCIES, CURRENCY_LABEL } from '../format';
+import type { CurrencyDef } from '../format';
 import {
   APP_SCOPE,
   BASIS_KEY,
-  FX_RATES_KEY,
+  CURRENCIES_KEY,
   RECON_DAY_KEY,
   RECON_LEAD_KEY,
   basisOf,
+  currenciesOf,
   reconcileDayOf,
   reconcileLeadOf,
 } from '../settings';
@@ -18,22 +19,27 @@ const OPTIONS: Array<{ value: AccountingBasis; label: string; desc: string }> = 
   { value: 'cash', label: '收付实现制', desc: '只把实际到账算收入，赊账等收到钱才计。直观、贴日常现金流。' },
 ];
 
-/** 全局设置：记账口径 / 对账提醒 / 汇率表，全部应用于所有账本。 */
+const emptyNew = { code: '', symbol: '', name: '', decimals: '2', rate: '' };
+
+/** 全局设置：记账口径 / 对账提醒 / 币种，全部应用于所有账本。 */
 export default function Settings({
   repo,
   settings,
-  convert,
+  usedCurrencies,
   reload,
 }: {
   repo: Repository;
   settings: StoredSetting[];
-  convert: ConvertCtx;
+  usedCurrencies: Set<string>;
   reload: () => Promise<void>;
 }) {
   const basis = basisOf(settings);
   const reconDay = reconcileDayOf(settings);
   const reconLead = reconcileLeadOf(settings);
+  const custom = currenciesOf(settings).filter((c) => c.code !== 'CNY');
   const [saving, setSaving] = useState(false);
+  const [nc, setNc] = useState(emptyNew);
+  const [err, setErr] = useState<string | null>(null);
 
   async function save(key: string, value: string): Promise<void> {
     if (saving) return;
@@ -46,22 +52,52 @@ export default function Settings({
     }
   }
 
-  async function saveRate(currency: string, raw: string): Promise<void> {
-    const n = Number(raw);
-    const next: Record<string, number> = {};
-    for (const c of CURRENCIES) {
-      if (c === 'CNY') continue;
-      const r = c === currency ? n : convert.rates[c];
-      if (typeof r === 'number' && Number.isFinite(r) && r > 0) next[c] = r;
-    }
+  async function persistCurrencies(defs: CurrencyDef[]): Promise<void> {
     setSaving(true);
     try {
-      await repo.setSetting(APP_SCOPE, FX_RATES_KEY, JSON.stringify(next));
+      await repo.setSetting(APP_SCOPE, CURRENCIES_KEY, JSON.stringify(defs));
       await reload();
     } finally {
       setSaving(false);
     }
   }
+
+  function updateCurrency(code: string, patch: Partial<CurrencyDef>): void {
+    void persistCurrencies(custom.map((d) => (d.code === code ? { ...d, ...patch } : d)));
+  }
+
+  async function addCurrency(): Promise<void> {
+    setErr(null);
+    const code = nc.code.trim().toUpperCase();
+    if (!code) return setErr('请输入币种代码（如 JPY、BTC）');
+    if (code === 'CNY' || custom.some((c) => c.code === code)) return setErr(`币种「${code}」已存在`);
+    const rate = Number(nc.rate);
+    if (!Number.isFinite(rate) || rate <= 0) return setErr('请输入有效的对人民币汇率');
+    const dec = parseInt(nc.decimals, 10);
+    await persistCurrencies([
+      ...custom,
+      {
+        code,
+        symbol: nc.symbol.trim() || code,
+        name: nc.name.trim() || code,
+        decimals: Number.isInteger(dec) && dec >= 0 && dec <= 8 ? dec : 2,
+        rate,
+      },
+    ]);
+    setNc(emptyNew);
+  }
+
+  async function removeCurrency(c: CurrencyDef): Promise<void> {
+    setErr(null);
+    if (usedCurrencies.has(c.code)) return setErr(`「${c.code}」已有账户在用，不能删除（先归档/改用其他币种的账户）`);
+    if (!confirm(`删除币种「${c.name} ${c.code}」？`)) return;
+    await persistCurrencies(custom.filter((x) => x.code !== c.code));
+  }
+
+  const num = (s: string, fallback: number): number => {
+    const n = Number(s);
+    return Number.isFinite(n) ? n : fallback;
+  };
 
   return (
     <>
@@ -126,27 +162,64 @@ export default function Settings({
       </div>
 
       <div className="card">
-        <h3>汇率表</h3>
+        <h3>币种</h3>
         <p className="muted small">
-          多币种账户在财务总表里按币种分组，并用这里的汇率折合成人民币总值。折合仅用于展示，不改原币余额。
+          自定义币种（代码 / 符号 / 名称 / 小数位 / 对人民币汇率）。多币种账户在财务总表按币种分组、用汇率折合人民币展示。
+          人民币是本位币、固定不可改。
         </p>
-        <div className="fx-grid">
-          {CURRENCIES.filter((c) => c !== 'CNY').map((c) => (
-            <label key={c} className="fx-row">
-              <span>1 {CURRENCY_LABEL[c]} =</span>
-              <span className="fx-input">
-                <input
-                  inputMode="decimal"
-                  defaultValue={String(convert.rates[c] ?? '')}
-                  placeholder="如 7.10"
-                  onBlur={(e) => void saveRate(c, e.target.value)}
-                  disabled={saving}
-                />
-                <span className="muted">元</span>
-              </span>
-            </label>
+        <div className="cur-table">
+          <div className="cur-head">
+            <span>代码</span>
+            <span>符号</span>
+            <span>名称</span>
+            <span>小数位</span>
+            <span>1 单位 = ¥</span>
+            <span />
+          </div>
+          <div className="cur-row muted">
+            <span>CNY</span>
+            <span>¥</span>
+            <span>人民币</span>
+            <span>2</span>
+            <span>1</span>
+            <span className="small">本位币</span>
+          </div>
+          {custom.map((c) => (
+            <div className="cur-row" key={c.code}>
+              <span className="cur-code">{c.code}</span>
+              <input defaultValue={c.symbol} onBlur={(e) => updateCurrency(c.code, { symbol: e.target.value.trim() || c.code })} disabled={saving} />
+              <input defaultValue={c.name} onBlur={(e) => updateCurrency(c.code, { name: e.target.value.trim() || c.code })} disabled={saving} />
+              <input
+                inputMode="numeric"
+                defaultValue={String(c.decimals)}
+                onBlur={(e) => updateCurrency(c.code, { decimals: Math.min(8, Math.max(0, Math.trunc(num(e.target.value, c.decimals)))) })}
+                disabled={saving || usedCurrencies.has(c.code)}
+                title={usedCurrencies.has(c.code) ? '已有账户在用，小数位不可改（会错读已记金额）' : ''}
+              />
+              <input
+                inputMode="decimal"
+                defaultValue={String(c.rate)}
+                onBlur={(e) => { const r = num(e.target.value, c.rate); if (r > 0) updateCurrency(c.code, { rate: r }); }}
+                disabled={saving}
+              />
+              <button className="lnk danger" onClick={() => void removeCurrency(c)} disabled={saving}>
+                删除
+              </button>
+            </div>
           ))}
         </div>
+
+        <div className="cur-add">
+          <input placeholder="代码 JPY" value={nc.code} onChange={(e) => setNc({ ...nc, code: e.target.value })} />
+          <input placeholder="符号 ¥" value={nc.symbol} onChange={(e) => setNc({ ...nc, symbol: e.target.value })} />
+          <input placeholder="名称 日元" value={nc.name} onChange={(e) => setNc({ ...nc, name: e.target.value })} />
+          <input placeholder="小数位 0" inputMode="numeric" value={nc.decimals} onChange={(e) => setNc({ ...nc, decimals: e.target.value })} />
+          <input placeholder="汇率 0.05" inputMode="decimal" value={nc.rate} onChange={(e) => setNc({ ...nc, rate: e.target.value })} />
+          <button className="btn btn-primary" onClick={() => void addCurrency()} disabled={saving}>
+            添加
+          </button>
+        </div>
+        {err && <p className="form-err">{err}</p>}
       </div>
     </>
   );

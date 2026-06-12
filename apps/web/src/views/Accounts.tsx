@@ -4,7 +4,7 @@ import type { AccountType } from '@app/core';
 import type { StoredAccount } from '@app/store';
 import type { AppData } from '../App';
 import { genId } from '../db';
-import { CURRENCIES, CURRENCY_LABEL, fmtMoney } from '../format';
+import { currencyList, fmtMoney } from '../format';
 
 const GROUPS: Array<{ type: AccountType; label: string; hint: string }> = [
   { type: 'asset', label: '资产账户', hint: '现金 / 银行卡 / 钱包等' },
@@ -193,9 +193,9 @@ export default function Accounts({ data }: { data: AppData }) {
             <label>
               币种
               <select value={newCurrency} onChange={(e) => setNewCurrency(e.target.value)}>
-                {CURRENCIES.map((c) => (
-                  <option key={c} value={c}>
-                    {CURRENCY_LABEL[c]}
+                {currencyList().map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.name} {c.code}
                   </option>
                 ))}
               </select>

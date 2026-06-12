@@ -12,18 +12,28 @@ export function accountBalance(txns: Transaction[], accountId: string): number {
 }
 
 /**
- * 多币种折算上下文：rates[币种] = 1 单位该币种折合多少展示币种（同 scale）；display = 展示币种。
- * 展示币种自身 rate 视为 1；缺失汇率按 1 兜底（调用方应为在用币种补齐汇率）。
+ * 多币种折算上下文：
+ * - rates[币种] = 1 单位该币种折合多少展示币种主单位；展示币种自身 rate 视为 1、缺失按 1 兜底。
+ * - scales[币种] = 该币种最小单位的小数位（CNY/USD=2、JPY=0、BTC=8…），缺失按 2。
+ * - display = 展示币种代码。
  */
 export interface ConvertCtx {
   rates: Record<string, number>;
+  scales: Record<string, number>;
   display: string;
 }
 
-/** 把一笔原币最小单位金额折算到展示币种（Phase 1 同为 2 位小数，直接按汇率乘）。 */
+/**
+ * 把一笔原币最小单位金额折算到展示币种（支持不同小数位）：
+ * minorD = round(minorFrom × rate × 10^(scaleD − scaleFrom))。
+ * 例：0.05 BTC(scale8, minor=5e6) × 400000 × 10^(2−8) = ¥20,000(minor 2,000,000)。
+ */
 export function convertAmount(minor: number, from: string, ctx: ConvertCtx): number {
   if (from === ctx.display) return minor;
-  return Math.round(minor * (ctx.rates[from] ?? 1));
+  const sf = ctx.scales[from] ?? 2;
+  const sd = ctx.scales[ctx.display] ?? 2;
+  const rate = ctx.rates[from] ?? 1;
+  return Math.round(minor * rate * 10 ** (sd - sf));
 }
 
 /** 净资产 = 所有「资产 + 负债」账户余额之和（负债以负数存储，故直接相加）。

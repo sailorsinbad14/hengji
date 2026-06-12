@@ -3,7 +3,7 @@ import { expandEntry, forexEntry, toMinor } from '@app/core';
 import type { EntryInput } from '@app/core';
 import type { AppData } from '../App';
 import { genId } from '../db';
-import { CURRENCY_SYMBOL, todayISO } from '../format';
+import { currencyDef, todayISO } from '../format';
 
 type Kind = 'expense' | 'income' | 'transfer';
 
@@ -30,8 +30,8 @@ export default function QuickEntry({ data }: { data: AppData }) {
   // 分录币种 = 选中真实账户（资产/负债）的币种；分类(income/expense)随账户币种走
   const accCurrency = reals.find((a) => a.id === effAcc)?.currency ?? 'CNY';
   const toCurrency = reals.find((a) => a.id === effTo)?.currency ?? 'CNY';
-  const sym = CURRENCY_SYMBOL[accCurrency] ?? accCurrency;
-  const toSym = CURRENCY_SYMBOL[toCurrency] ?? toCurrency;
+  const sym = currencyDef(accCurrency).symbol;
+  const toSym = currencyDef(toCurrency).symbol;
   // 跨币种转账 = 换汇：汇出/到账两个原币金额
   const isForex = kind === 'transfer' && effAcc !== effTo && accCurrency !== toCurrency;
 
@@ -44,7 +44,7 @@ export default function QuickEntry({ data }: { data: AppData }) {
       return;
     }
     try {
-      const minor = toMinor(major);
+      const minor = toMinor(major, currencyDef(accCurrency).decimals);
       if (kind === 'transfer' && effAcc === effTo) {
         setErr('转出与转入账户不能相同');
         return;
@@ -63,7 +63,7 @@ export default function QuickEntry({ data }: { data: AppData }) {
             fromAmount: minor,
             fromCurrency: accCurrency,
             toAccountId: effTo,
-            toAmount: toMinor(toMajor),
+            toAmount: toMinor(toMajor, currencyDef(toCurrency).decimals),
             toCurrency,
             payee,
           },
