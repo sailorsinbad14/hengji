@@ -47,8 +47,10 @@
 
 **生意分期细化（B1 后重排）**：近期落地序 **C1 商品目录 → 月度对账 → 多币种 → C2 库存 → B 收尾（应收账龄/到期）**。
 - **C1 商品目录**：Product 主数据（名/进价/售价/是否库存品/单位）；订单行可选商品自动带价（订单行加 `productId`）。非库存品＝报价目录，纯省录入。不含库存/COGS。
-- **C2 库存（仅库存品）✅ 已落地（2026-06-12）**：数量从出入库流水聚合（不存死值）；入仓＝进货/补货（+，按进价）；出货＝订单完成自动（−，按移动加权均价结转营业成本）→ 每单毛利。**实现**：core `InventoryMovement` + `inventory.ts`(inventoryState/currentAvgCost/issueCost 移动加权均价回放)；store M9 `inventory_movements` 表 + repo CRUD；biz `recordStockIn`(借库存商品/贷 CNY 资产 + in 流水)、`completeOrder` 加 COGS 结转(借营业成本/贷库存商品 + out 流水，先校验在手充足、不足整单不落)；web「库存」tab(在手/均价/库存值 + 进货)、Orders 每单毛利(订单收入折人民币 − 成本)。**库存人民币本位**。**有意从简/后续**：供应商应付(AP 赊购)、外币采购、代采(dropship)双模式仍后置。
-- **B 收尾**：应收账龄 + 到期提醒（用 customer.dueDays + 订单日期）。
+- **C2 库存（仅库存品）✅ 已落地（2026-06-12）**：数量从出入库流水聚合（不存死值）；入仓＝进货/补货（+，按进价）；出货＝订单完成自动（−，按移动加权均价结转营业成本）→ 每单毛利。**实现**：core `InventoryMovement` + `inventory.ts`(inventoryState/currentAvgCost/issueCost 移动加权均价回放)；store M9 `inventory_movements` 表 + repo CRUD；biz `recordStockIn`(借库存商品/贷 CNY 资产 + in 流水)、`completeOrder` 加 COGS 结转(借营业成本/贷库存商品 + out 流水，先校验在手充足、不足整单不落)；web「库存」tab(在手/均价/库存值 + 进货)、Orders 每单毛利(订单收入折人民币 − 成本)。**库存人民币本位**。
+- **C2c 供应商 + 应付账款 ✅ 已落地（2026-06-12）**：镜像 AR。core `Supplier` + `creditPurchaseEntry`(借库存/贷应付)/`supplierPaymentEntry`(借应付/贷资产)，负债余额为负=欠款。store M10 `suppliers` 表 + CRUD + settlement out/supplier 校验（Settlement 早含 out/supplier，还款无新迁移）。biz 应付按「供应商×币种」子科目(CNY 本位)、payableSummary、recordCreditStockIn/recordSupplierPayment。web「供应商」tab(档案 + 应付概览 + 内联还款)、库存进货加现结/赊账、AP 自动管理。**简化**：AP 恒 CNY；赊购落库存非费用、COGS 仍销售时确认（与记账口径只作用 AR 不相交）；还款按供应商不按单分摊。
+- **C2d 代采 dropship ✅ 已落地（2026-06-12）**：完整版（Purchase 实体）。Product 加 `dropship`(与 isStock 互斥)；`Purchase(+PurchaseLine)`(store M11 `purchases`/`purchase_lines` 表 + CRUD)。代采品订单初始「待采购」→「为此单采购」(供应商/现结or赊账→AP/逐行采购价，成本计入「代采在途成本」holding 资产、状态转「待发货」)→ 完成结转 COGS(借营业成本/贷代采在途，holding 净归零)→ 每单毛利=订单收入折CNY − 代采成本。**不过库存均价池**。**简化**：代采恒 CNY；一单一次采购(无部分/重采)；每产品毛利汇总后置；已采购单取消需手动反向。
+- **B 收尾**：应收账龄 + 到期提醒（用 customer.dueDays + 订单日期）✅ 已落地（见上方 B 期段）。
 
 ## 多币种（个人追踪派，2026-06 评审通过；✅ Phase 1 已落地）
 
