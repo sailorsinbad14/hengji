@@ -250,9 +250,13 @@ input:focus, select:focus { outline: 2px solid var(--brand-50); border-color: va
 .rec-hint { margin-top: 10px; }
 .rec-list { display: flex; flex-direction: column; }
 .rec-row {
-  display: grid; grid-template-columns: 20px 92px 1fr auto; align-items: center; gap: 10px;
+  display: grid; grid-template-columns: 20px 92px 1fr auto auto; align-items: center; gap: 10px;
   padding: 8px 6px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 14px;
 }
+.rec-del { padding: 2px 6px; opacity: 0.35; }
+.rec-row:hover .rec-del { opacity: 1; }
+.rec-add { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.rec-add-form { margin-top: 4px; }
 .rec-row:last-child { border-bottom: none; }
 .rec-row.on { background: var(--brand-50); border-radius: 8px; }
 .rec-row input { width: auto; }
