@@ -57,6 +57,11 @@ export function todayISO(): string {
   return localISO(new Date());
 }
 
+/** 两个 YYYY-MM-DD 间的天数（to − from），按 UTC 解析避免夏令时差一天。 */
+export function daysBetween(from: string, to: string): number {
+  return Math.floor((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
+}
+
 export function currentMonth(): string {
   return todayISO().slice(0, 7);
 }

@@ -6,6 +6,7 @@ import {
   collectionEntry,
   allocateCustomerPayments,
   agingBuckets,
+  outstandingCharges,
   creditPurchaseEntry,
   supplierPaymentEntry,
   purchaseTotal,
@@ -208,5 +209,16 @@ describe('agingBuckets（应收账龄分桶）', () => {
 
   it('空列表全 0', () => {
     expect(agingBuckets([])).toEqual({ d0_30: 0, d31_60: 0, d61_90: 0, over90: 0, total: 0 });
+  });
+});
+
+describe('outstandingCharges（应付 FIFO 摊还）', () => {
+  it('还款按时间序顺延抵掉最早赊欠，返回仍欠的', () => {
+    const charges = [{ amount: 5000, date: '2026-06-05' }, { amount: 10000, date: '2026-06-01' }];
+    // 还 ¥120 → 先抵早单(100 清)、晚单部分(20)，仍欠晚单 30
+    expect(outstandingCharges(charges, 12000)).toEqual([{ amount: 3000, date: '2026-06-05' }]);
+    expect(outstandingCharges(charges, 0)).toEqual([{ amount: 10000, date: '2026-06-01' }, { amount: 5000, date: '2026-06-05' }]);
+    expect(outstandingCharges(charges, 15000)).toEqual([]); // 全清
+    expect(outstandingCharges(charges, 20000)).toEqual([]); // 超额（预付）也算清
   });
 });

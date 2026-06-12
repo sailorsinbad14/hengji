@@ -177,9 +177,9 @@ export default function Settings({
       </div>
 
       <div className="card">
-        <h3>应收到期提醒</h3>
+        <h3>往来到期提醒</h3>
         <p className="muted small">
-          生意账本里有应收款临近到期（按客户账期 = 下单日 + 账期天数）或已逾期时，在账本顶部提醒去跟进收款。无应收 / 全部收清则不打扰。
+          生意账本里应收款（客户账期 = 下单日 + 账期）或应付款（供应商账期 = 采购日 + 账期）临近到期或已逾期时，在账本顶部提醒去跟进收款 / 安排付款。无往来 / 全部结清则不打扰。
         </p>
         <div className="rec-setup">
           <label>

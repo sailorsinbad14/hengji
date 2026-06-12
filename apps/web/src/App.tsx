@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { accountBalance, convertAmount, unclearedCount } from '@app/core';
+import { accountBalance, convertAmount, outstandingCharges, unclearedCount } from '@app/core';
 import type { AccountingBasis, BookType, ConvertCtx } from '@app/core';
-import type { Repository, StoredAccount, StoredBook, StoredBudget, StoredCustomer, StoredOrder, StoredSetting, StoredSettlement, StoredTransaction } from '@app/store';
+import type { Repository, StoredAccount, StoredBook, StoredBudget, StoredCustomer, StoredOrder, StoredSetting, StoredSettlement, StoredSupplier, StoredTransaction } from '@app/store';
 import { BOOK_META, createBookWithChart, isDesktop, ready } from './db';
-import { fmtMoney, setCurrencyRegistry, todayISO } from './format';
-import { customerOrderStatus } from './biz';
+import { daysBetween, fmtMoney, setCurrencyRegistry, todayISO } from './format';
+import { customerOrderStatus, payableLedger } from './biz';
 import { basisOf, convertCtxOf, currenciesOf, dueLeadOf, multiCurrencyOn, reconcileDayOf, reconcileLeadOf, reconcileTargetDate, reconcileWindowOpen } from './settings';
 import OverviewAll from './views/OverviewAll';
 import Dashboard from './views/Dashboard';
@@ -79,6 +79,7 @@ export default function App() {
   const [settings, setSettings] = useState<StoredSetting[]>([]);
   const [orders, setOrders] = useState<StoredOrder[]>([]);
   const [customers, setCustomers] = useState<StoredCustomer[]>([]);
+  const [suppliers, setSuppliers] = useState<StoredSupplier[]>([]);
   const [settlements, setSettlements] = useState<StoredSettlement[]>([]);
   const [cur, setCur] = useState<'all' | string>('all');
   const [view, setView] = useState<View>('dashboard');
@@ -87,9 +88,10 @@ export default function App() {
   const [nbType, setNbType] = useState<BookType>('personal');
   const [reconDismissed, setReconDismissed] = useState<Set<string>>(new Set());
   const [dueDismissed, setDueDismissed] = useState<Set<string>>(new Set());
+  const [apDueDismissed, setApDueDismissed] = useState<Set<string>>(new Set());
 
   async function loadFrom(r: Repository): Promise<void> {
-    const [bk, a, t, b, s, os, cs, st] = await Promise.all([
+    const [bk, a, t, b, s, os, cs, st, sup] = await Promise.all([
       r.listBooks(),
       r.listAccounts(),
       r.listTransactions(),
@@ -98,6 +100,7 @@ export default function App() {
       r.listOrders(),
       r.listCustomers({ includeArchived: true }),
       r.listSettlements(),
+      r.listSuppliers({ includeArchived: true }),
     ]);
     setCurrencyRegistry(currenciesOf(s)); // 注入币种注册表，供 fmtMoney 等取符号/小数位
     setBooks(bk);
@@ -108,6 +111,7 @@ export default function App() {
     setOrders(os);
     setCustomers(cs);
     setSettlements(st);
+    setSuppliers(sup);
   }
 
   useEffect(() => {
@@ -166,6 +170,31 @@ export default function App() {
     };
   }, [curBook, settings, orders, customers, settlements, convert]);
 
+  // 应付到期提醒（仅生意账本，复用同一提前天数设置）：供应商赊购临近到期（购货日 + 账期），含已逾期。
+  const apDueReminder = useMemo(() => {
+    if (!curBook || curBook.type !== 'business') return null;
+    const lead = dueLeadOf(settings);
+    if (lead === null) return null;
+    const today = todayISO();
+    let count = 0;
+    let overdueCount = 0;
+    let total = 0;
+    for (const sup of suppliers) {
+      if (sup.bookId !== curBook.id || sup.dueDays <= 0) continue; // 现款现货（dueDays=0）不追踪到期
+      const { charges, paid } = payableLedger(scoped.accounts, scoped.txns, sup.name);
+      for (const c of outstandingCharges(charges, paid)) {
+        const days = daysBetween(c.date, today);
+        const daysToDue = sup.dueDays - days;
+        if (daysToDue <= lead) {
+          count++;
+          if (days > sup.dueDays) overdueCount++;
+          total += convertAmount(c.amount, 'CNY', convert);
+        }
+      }
+    }
+    return count > 0 ? { count, overdueCount, total } : null;
+  }, [curBook, settings, suppliers, scoped.accounts, scoped.txns, convert]);
+
   if (!repo) return <div className="splash">账本加载中…</div>;
 
   function openBook(id: 'all' | string, type?: BookType): void {
@@ -199,6 +228,7 @@ export default function App() {
   const tabs = curBook ? TABS[curBook.type] : [];
   const showReminder = reconReminder && curBook && !reconDismissed.has(curBook.id);
   const showDueReminder = dueReminder && curBook && !dueDismissed.has(curBook.id);
+  const showApDueReminder = apDueReminder && curBook && !apDueDismissed.has(curBook.id);
 
   return (
     <div className="app">
@@ -316,6 +346,25 @@ export default function App() {
                     去收款
                   </button>
                   <button className="rb-x" onClick={() => setDueDismissed((s) => new Set(s).add(curBook!.id))}>
+                    稍后
+                  </button>
+                </div>
+              </div>
+            )}
+            {showApDueReminder && (
+              <div className="recon-banner due-banner">
+                <span>
+                  💸 有 {apDueReminder!.count} 笔应付
+                  {apDueReminder!.overdueCount > 0 &&
+                    (apDueReminder!.overdueCount === apDueReminder!.count ? '已逾期' : `（其中 ${apDueReminder!.overdueCount} 笔已逾期）`)}
+                  {apDueReminder!.overdueCount === 0 && '即将到期'}
+                  ，合计 {fmtMoney(apDueReminder!.total, convert.display)}，建议及时安排付款。
+                </span>
+                <div className="rb-actions">
+                  <button className="btn btn-primary rb-go" onClick={() => setView('suppliers')}>
+                    去付款
+                  </button>
+                  <button className="rb-x" onClick={() => setApDueDismissed((s) => new Set(s).add(curBook!.id))}>
                     稍后
                   </button>
                 </div>

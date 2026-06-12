@@ -2,6 +2,7 @@ import { accountBalance, allocateCustomerPayments, collectionEntry, convertAmoun
 import type { AccountType, ConvertCtx, Customer, CustomerPayment, Order, OrderPaymentStatus, PurchaseLine, Supplier } from '@app/core';
 import type { Repository, StoredAccount, StoredBook, StoredCustomer, StoredOrder, StoredSettlement, StoredTransaction } from '@app/store';
 import { genId } from './db';
+import { daysBetween } from './format';
 
 /**
  * 生意视图的编排层（UI 与 store 之间）：把业务动作翻译成「建应收子科目 → core 生成平衡分录 →
@@ -80,11 +81,6 @@ export interface OutstandingOrder {
   daysToDue: number | null;
 }
 
-/** 两个 YYYY-MM-DD 间的天数（to − from），按 UTC 解析避免夏令时差一天。 */
-function daysBetweenISO(from: string, to: string): number {
-  return Math.floor((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
-}
-
 /**
  * 按「客户 × 币种」把收款 FIFO 摊到各已完成订单，得到每单收款状态 + 未收清订单的账龄/逾期。
  * 应收账龄报表与到期提醒共用——FIFO 与账期编排集中在此，UI 不重复实现。
@@ -131,7 +127,7 @@ export function customerOrderStatus(
       payStatus.set(a.orderId, { status: a.status, collected: a.collected, total: a.total });
       if (a.status !== 'paid') {
         const ord = custOrders.find((o) => o.id === a.orderId)!;
-        const days = daysBetweenISO(ord.date, today);
+        const days = daysBetween(ord.date, today);
         outstanding.push({
           order: ord,
           owed: a.total - a.collected,
@@ -434,6 +430,28 @@ export function payableSummary(
     else if (owed < 0) prepaid += -owed;
   }
   return { payable, prepaid };
+}
+
+/**
+ * 某供应商应付账上的赊欠台账（CNY 本位）：从应付子科目分录聚合——赊购=贷应付（负）记一笔 charge，
+ * 还款=借应付（正）累加 paid。供应付账龄/到期用 `outstandingCharges` FIFO 摊还。
+ */
+export function payableLedger(
+  accounts: StoredAccount[],
+  txns: StoredTransaction[],
+  supplierName: string,
+): { charges: Array<{ amount: number; date: string }>; paid: number } {
+  const ids = new Set(supplierApAccounts(accounts, supplierName).map((a) => a.id));
+  const charges: Array<{ amount: number; date: string }> = [];
+  let paid = 0;
+  for (const t of txns) {
+    for (const p of t.postings) {
+      if (!ids.has(p.accountId)) continue;
+      if (p.amount < 0) charges.push({ amount: -p.amount, date: t.date }); // 赊购：欠款增
+      else if (p.amount > 0) paid += p.amount; // 还款：欠款减
+    }
+  }
+  return { charges, paid };
 }
 
 /** 找/建顶层「应付账款」负债父科目，返回 id。 */

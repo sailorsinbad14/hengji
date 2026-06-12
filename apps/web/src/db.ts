@@ -172,6 +172,16 @@ async function bootstrapDemo(): Promise<Repository> {
   );
   await repo.addTransaction(apBuy);
   await repo.addInventoryMovement({ id: genId(), bookId: biz.book.id, productId: prodB, date: daysAgo(10), kind: 'in', qty: 30, unitCost: toMinor(18), orderId: null, txnId: apBuy.id, note: '赊购' });
+  // 一笔逾期应付——展示「应付账龄分桶 + 应付到期提醒」：包装供应商账期7天，40天前赊购包材未付 → 逾期、落 31–60 桶。
+  const sup2Id = genId();
+  await repo.addSupplier({ id: sup2Id, bookId: biz.book.id, name: '包装供应商', phone: '', note: '', dueDays: 7, archived: false });
+  const ap2SubId = genId();
+  await repo.addAccount({ id: ap2SubId, bookId: biz.book.id, name: '应付账款/包装供应商', type: 'liability', parentId: apParentId, currency: 'CNY', archived: false });
+  const ap2Buy = expandEntry(
+    { kind: 'expense', bookId: biz.book.id, date: daysAgo(40), amount: toMinor(800), currency: 'CNY', accountId: ap2SubId, categoryId: biz.byName('运费杂费'), payee: '包装供应商', note: '赊购包材' },
+    genId,
+  );
+  await repo.addTransaction(ap2Buy);
   // 营业成本科目 + 出库结转助手（订单完成时库存品按出库时点均价结转 COGS + 记 out 流水）
   const cogsAcctId = genId();
   await repo.addAccount({ id: cogsAcctId, bookId: biz.book.id, name: '营业成本', type: 'expense', parentId: null, currency: 'CNY', archived: false });

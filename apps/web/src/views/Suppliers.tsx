@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
-import { fromMinor, toMinor } from '@app/core';
+import { useEffect, useMemo, useState } from 'react';
+import { agingBuckets, convertAmount, fromMinor, outstandingCharges, toMinor } from '@app/core';
 import type { StoredSupplier } from '@app/store';
 import type { AppData } from '../App';
 import { genId } from '../db';
-import { fmtMoney, todayISO } from '../format';
-import { payableBalance, payableSummary, recordSupplierPayment, renameSupplier } from '../biz';
+import { daysBetween, fmtMoney, todayISO } from '../format';
+import { payableBalance, payableLedger, payableSummary, recordSupplierPayment, renameSupplier } from '../biz';
 
 export default function Suppliers({ data }: { data: AppData }) {
   const { repo, book, accounts, txns, reload, convert } = data;
@@ -35,6 +35,18 @@ export default function Suppliers({ data }: { data: AppData }) {
     (a) => a.type === 'asset' && a.currency === 'CNY' && !a.name.startsWith('应收账款') && a.name !== '库存商品',
   );
   const summary = payableSummary(accounts, txns, convert);
+  // 应付账龄：各供应商仍欠的赊购按账龄（自采购日起）分桶，折算到展示币种（应付恒 CNY）。
+  const aging = useMemo(() => {
+    const today = todayISO();
+    const items: Array<{ amount: number; days: number }> = [];
+    for (const s of list) {
+      const { charges, paid } = payableLedger(accounts, txns, s.name);
+      for (const c of outstandingCharges(charges, paid)) {
+        items.push({ amount: convertAmount(c.amount, 'CNY', convert), days: daysBetween(c.date, today) });
+      }
+    }
+    return agingBuckets(items);
+  }, [list, accounts, txns, convert]);
 
   async function add(): Promise<void> {
     setErr(null);
@@ -131,6 +143,21 @@ export default function Suppliers({ data }: { data: AppData }) {
               {summary.prepaid > 0 && <span className="recv-pre">预付 {fmtMoney(summary.prepaid, convert.display)}</span>}
             </span>
           </div>
+          {aging.total > 0 && (
+            <div className="aging" title="按赊购账龄（自采购日起）分桶，金额已折算到展示币种">
+              {[
+                { label: '0–30 天', amt: aging.d0_30, cls: '' },
+                { label: '31–60 天', amt: aging.d31_60, cls: '' },
+                { label: '61–90 天', amt: aging.d61_90, cls: 'warn' },
+                { label: '90 天以上', amt: aging.over90, cls: 'danger' },
+              ].map((c) => (
+                <div className={`aging-cell ${c.cls}`} key={c.label}>
+                  <span className="aging-amt">{fmtMoney(c.amt, convert.display)}</span>
+                  <span className="aging-label">{c.label}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

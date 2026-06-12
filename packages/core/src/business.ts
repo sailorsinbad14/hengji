@@ -232,6 +232,30 @@ export interface AgingBuckets {
 }
 
 /**
+ * FIFO 摊还：把累计已还款额从最早的赊欠逐笔抵掉，返回仍未还清的赊欠（按时间升序、带原始日期）。
+ * 用于应付账龄/到期——应付科目上每笔赊购是一笔 charge（赊欠），还款按下单先后顺延抵扣。
+ * @param charges 各笔赊欠（amount>0 最小单位 + date YYYY-MM-DD），无需预排序
+ * @param totalPaid 累计已还款（最小单位，负数按 0）
+ */
+export function outstandingCharges(
+  charges: ReadonlyArray<{ amount: number; date: string }>,
+  totalPaid: number,
+): Array<{ amount: number; date: string }> {
+  const sorted = [...charges].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  let pay = Math.max(0, totalPaid);
+  const out: Array<{ amount: number; date: string }> = [];
+  for (const c of sorted) {
+    if (pay >= c.amount) {
+      pay -= c.amount;
+      continue;
+    }
+    out.push({ amount: c.amount - pay, date: c.date });
+    pay = 0;
+  }
+  return out;
+}
+
+/**
  * 应收账龄分桶：按每笔欠款的账龄（自开票/下单日起的天数）归入 0–30 / 31–60 / 61–90 / 90+ 桶。
  * 边界归入较小桶：30→0–30、60→31–60、90→61–90、91→90+。金额单位需调用方统一（混合币种应先折算）。
  */

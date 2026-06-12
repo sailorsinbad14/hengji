@@ -123,6 +123,48 @@ export default function Orders({ data }: { data: AppData }) {
   const costOf = (o: StoredOrder): number => (cogsByOrder.get(o.id) ?? 0) + (dropshipCostByOrder.get(o.id) ?? 0);
   const marginOf = (o: StoredOrder): number => convertAmount(orderTotal(o.lines), o.currency, cnyCtx) - costOf(o);
 
+  // 毛利汇总（人民币本位）：已完成订单按客户 / 按商品聚合收入、成本、毛利。
+  const margins = useMemo(() => {
+    const cny = { rates: convert.rates, scales: convert.scales, display: 'CNY' };
+    const byCust = new Map<string, { rev: number; cost: number }>();
+    const prodRev = new Map<string, number>();
+    const prodCost = new Map<string, number>();
+    const completedIds = new Set<string>();
+    for (const o of orders) {
+      if (o.status !== 'completed') continue;
+      completedIds.add(o.id);
+      const cur = byCust.get(o.customerId) ?? { rev: 0, cost: 0 };
+      cur.rev += convertAmount(orderTotal(o.lines), o.currency, cny);
+      cur.cost += (cogsByOrder.get(o.id) ?? 0) + (dropshipCostByOrder.get(o.id) ?? 0);
+      byCust.set(o.customerId, cur);
+      for (const l of o.lines) {
+        if (!l.productId) continue;
+        prodRev.set(l.productId, (prodRev.get(l.productId) ?? 0) + convertAmount(Math.round(l.qty * l.unitPrice), o.currency, cny));
+      }
+    }
+    for (const mv of movements) {
+      if (mv.kind !== 'out') continue; // 库存品成本：出库流水按商品
+      prodCost.set(mv.productId, (prodCost.get(mv.productId) ?? 0) + Math.round(-mv.qty * mv.unitCost));
+    }
+    for (const p of purchases) {
+      if (!completedIds.has(p.orderId)) continue; // 代采品成本：已完成订单的采购单行按商品
+      for (const l of p.lines) {
+        if (!l.productId) continue;
+        prodCost.set(l.productId, (prodCost.get(l.productId) ?? 0) + Math.round(l.qty * l.unitCost));
+      }
+    }
+    const cust = [...byCust.entries()]
+      .map(([id, v]) => ({ id, rev: v.rev, cost: v.cost, margin: v.rev - v.cost }))
+      .sort((a, b) => b.margin - a.margin);
+    const prodIds = new Set([...prodRev.keys(), ...prodCost.keys()]);
+    const prod = [...prodIds]
+      .map((id) => ({ id, rev: prodRev.get(id) ?? 0, cost: prodCost.get(id) ?? 0, margin: (prodRev.get(id) ?? 0) - (prodCost.get(id) ?? 0) }))
+      .sort((a, b) => b.margin - a.margin);
+    return { cust, prod };
+  }, [orders, movements, purchases, cogsByOrder, dropshipCostByOrder, convert]);
+
+  const prodName = (id: string): string => products.find((p) => p.id === id)?.name ?? '（已删商品）';
+
   function setLine(key: string, patch: Partial<LineDraft>): void {
     setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   }
@@ -347,6 +389,33 @@ export default function Orders({ data }: { data: AppData }) {
               </div>
             ))
           )}
+        </div>
+      )}
+
+      {margins.cust.length > 0 && (
+        <div className="card">
+          <h3>毛利汇总</h3>
+          <p className="muted small" style={{ marginTop: 0 }}>已完成订单按客户 / 商品聚合（人民币本位：收入折人民币 − 成本）。</p>
+          <div className="margin-sub muted">按客户</div>
+          {margins.cust.map((c) => (
+            <div className="recv-row" key={c.id}>
+              <span className="bname">{custName(c.id)}</span>
+              <span className="bnum">
+                <strong className={c.margin >= 0 ? 'pos' : 'neg'}>{fmtMoney(c.margin)}</strong>
+                <span className="muted"> · 收 {fmtMoney(c.rev)} 本 {fmtMoney(c.cost)}</span>
+              </span>
+            </div>
+          ))}
+          <div className="margin-sub muted">按商品</div>
+          {margins.prod.map((p) => (
+            <div className="recv-row" key={p.id}>
+              <span className="bname">{prodName(p.id)}</span>
+              <span className="bnum">
+                <strong className={p.margin >= 0 ? 'pos' : 'neg'}>{fmtMoney(p.margin)}</strong>
+                <span className="muted"> · 收 {fmtMoney(p.rev)} 本 {fmtMoney(p.cost)}</span>
+              </span>
+            </div>
+          ))}
         </div>
       )}
 

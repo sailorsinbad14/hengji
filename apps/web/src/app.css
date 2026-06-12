@@ -314,6 +314,9 @@ input:focus, select:focus { outline: 2px solid var(--brand-50); border-color: va
 .due-banner { background: #fdecec; border-color: #f5c6c6; color: var(--neg); }
 .due-banner .rb-x { color: var(--neg); }
 
+/* 毛利汇总分组小标题 */
+.margin-sub { font-size: 12px; font-weight: 600; margin: 10px 0 2px; }
+
 /* 为此单采购：代采行采购价录入 */
 .ds-lines { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .ds-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
