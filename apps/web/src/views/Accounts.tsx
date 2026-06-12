@@ -102,9 +102,10 @@ export default function Accounts({ data }: { data: AppData }) {
           <div className="card" key={g.type}>
             <h3>{g.label}</h3>
             {rows.map((a) => {
-              // 应收账款及其按客户自动建的子科目由生意流程托管：禁止改名/归档，
-              // 否则会断开「应收账款/客户名」的名字关联、或被默认 listAccounts 排除而漏算应收。
-              const managed = a.name === '应收账款' || a.name.startsWith('应收账款/');
+              // 应收账款/应付账款及其按客户/供应商自动建的子科目由生意流程托管：禁止改名/归档，
+              // 否则会断开「应收账款/客户名」「应付账款/供应商名」的名字关联、或被默认 listAccounts 排除而漏算。
+              const managed =
+                a.name === '应收账款' || a.name.startsWith('应收账款/') || a.name === '应付账款' || a.name.startsWith('应付账款/');
               return (
                 <div className="brow" key={a.id}>
                   <div className="bhead">

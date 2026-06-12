@@ -6,6 +6,8 @@ import {
   collectionEntry,
   allocateCustomerPayments,
   agingBuckets,
+  creditPurchaseEntry,
+  supplierPaymentEntry,
   accountBalance,
   isBalanced,
   toMinor,
@@ -62,6 +64,38 @@ describe('collectionEntry（收款核销）', () => {
     expect(isBalanced(t.postings)).toBe(true);
     expect(t.postings.find((p) => p.accountId === 'wechat')!.amount).toBe(100000);
     expect(t.postings.find((p) => p.accountId === 'ar-c1')!.amount).toBe(-100000);
+  });
+});
+
+describe('creditPurchaseEntry（赊购入库）', () => {
+  it('借库存商品（资产+）贷应付账款（负债+→负），平衡；应付欠款累计为负', () => {
+    const gen = counter();
+    const t = creditPurchaseEntry(
+      { bookId: 'b1', date: '2026-06-10', amount: toMinor(900), payableAccountId: 'ap-s1', inventoryAccountId: 'inv', payee: '五金批发商' },
+      gen,
+    );
+    expect(isBalanced(t.postings)).toBe(true);
+    expect(t.postings.find((p) => p.accountId === 'inv')!.amount).toBe(90000); // 库存 +
+    expect(t.postings.find((p) => p.accountId === 'ap-s1')!.amount).toBe(-90000); // 应付 −（欠 ¥900）
+    expect(accountBalance([t], 'ap-s1')).toBe(-90000);
+  });
+});
+
+describe('supplierPaymentEntry（付供应商货款）', () => {
+  it('钱从付款账户转入应付，冲减欠款，平衡', () => {
+    const gen = counter();
+    const buy = creditPurchaseEntry(
+      { bookId: 'b1', date: '2026-06-10', amount: toMinor(900), payableAccountId: 'ap-s1', inventoryAccountId: 'inv' },
+      gen,
+    );
+    const pay = supplierPaymentEntry(
+      { bookId: 'b1', date: '2026-06-11', amount: toMinor(500), payableAccountId: 'ap-s1', assetAccountId: '对公账户' },
+      gen,
+    );
+    expect(isBalanced(pay.postings)).toBe(true);
+    expect(pay.postings.find((p) => p.accountId === 'ap-s1')!.amount).toBe(50000); // 应付 +（欠款减）
+    expect(pay.postings.find((p) => p.accountId === '对公账户')!.amount).toBe(-50000); // 资产 −
+    expect(accountBalance([buy, pay], 'ap-s1')).toBe(-40000); // 还欠 ¥400
   });
 });
 

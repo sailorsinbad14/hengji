@@ -7,6 +7,7 @@ import type {
   StoredInventoryMovement,
   StoredOrder,
   StoredProduct,
+  StoredSupplier,
   StoredReconciliation,
   StoredSetting,
   StoredSettlement,
@@ -80,6 +81,8 @@ export interface CustomerRow {
   updated_at: string;
   deleted: number;
 }
+/** suppliers 表行（结构同 customers）。 */
+export type SupplierRow = CustomerRow;
 export interface OrderRow {
   id: string;
   book_id: string;
@@ -224,6 +227,22 @@ export function toBudget(r: BudgetRow): StoredBudget {
 }
 
 export function toCustomer(r: CustomerRow): StoredCustomer {
+  return {
+    id: r.id,
+    bookId: r.book_id,
+    name: r.name,
+    phone: r.phone,
+    note: r.note,
+    dueDays: r.due_days,
+    archived: r.archived !== 0,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deleted: r.deleted !== 0,
+  };
+}
+
+/** suppliers 行 → StoredSupplier（结构同 customers）。 */
+export function toSupplier(r: SupplierRow): StoredSupplier {
   return {
     id: r.id,
     bookId: r.book_id,

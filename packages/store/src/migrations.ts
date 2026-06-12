@@ -13,6 +13,7 @@
  *   既有 posting 默认 cleared=0；纯新增列/表，不动既有数据。
  * - m8：订单结算币种 orders.currency（默认 'CNY'）；多币种业务 AR。既有订单回落 CNY。
  * - m9：库存出入库流水 inventory_movements（C2 库存）；纯新增表，不动既有数据。
+ * - m10：供应商档案 suppliers（C2 应付）；镜像 customers，纯新增表，不动既有数据。
  */
 
 export interface SqlRunner {
@@ -237,7 +238,25 @@ const M9: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_inv_mov_order ON inventory_movements(order_id)`,
 ];
 
-export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5, M6, M7, M8, M9];
+// m10：供应商档案（C2 应付）。镜像 customers——赊购入库挂应付账款/<供应商>子科目，
+// due_days 默认账期。纯新增表，个人/投资账本不产生这些行。
+const M10: string[] = [
+  `CREATE TABLE IF NOT EXISTS suppliers (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    due_days INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_suppliers_book ON suppliers(book_id)`,
+];
+
+export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5, M6, M7, M8, M9, M10];
 
 export async function migrate(r: SqlRunner): Promise<void> {
   const v = await r.getVersion();

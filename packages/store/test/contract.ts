@@ -281,6 +281,15 @@ export function runRepositoryContract(name: string, makeRepo: (now: Clock) => Re
       dueDays,
       archived,
     });
+    const supp = (id: string, bookId: string, name: string, dueDays = 0, archived = false) => ({
+      id,
+      bookId,
+      name,
+      phone: '',
+      note: '',
+      dueDays,
+      archived,
+    });
 
     it('客户 add/get + 账本校验 + bookId/归档过滤 + update', async () => {
       const repo = await seed(makeRepo(fakeClock()));
@@ -294,6 +303,56 @@ export function runRepositoryContract(name: string, makeRepo: (now: Clock) => Re
       expect((await repo.listCustomers({ bookId: B2 })).map((x) => x.id)).toEqual(['cu1']);
       expect((await repo.listCustomers({ bookId: B2, includeArchived: true })).length).toBe(2);
       await expect(repo.updateCustomer('nope', { name: 'x' })).rejects.toThrow();
+    });
+
+    it('供应商 add/get + 账本校验 + bookId/归档过滤 + update（镜像客户）', async () => {
+      const repo = await seed(makeRepo(fakeClock()));
+      const s = await repo.addSupplier(supp('su1', B2, '五金批发商', 30));
+      expect(s.deleted).toBe(false);
+      expect((await repo.getSupplier('su1'))!.dueDays).toBe(30);
+      await expect(repo.addSupplier(supp('suX', 'ghost', '幽灵'))).rejects.toThrow();
+      await repo.addSupplier(supp('su2', B2, '物料商'));
+      expect((await repo.listSuppliers({ bookId: B2 })).map((x) => x.id).sort()).toEqual(['su1', 'su2']);
+      await repo.updateSupplier('su2', { archived: true });
+      expect((await repo.listSuppliers({ bookId: B2 })).map((x) => x.id)).toEqual(['su1']);
+      expect((await repo.listSuppliers({ bookId: B2, includeArchived: true })).length).toBe(2);
+      await expect(repo.updateSupplier('nope', { name: 'x' })).rejects.toThrow();
+    });
+
+    it('付款 settlement（direction=out / 供应商同账本校验）', async () => {
+      const repo = await seed(makeRepo(fakeClock()));
+      await repo.addSupplier(supp('su1', B2, '五金批发商'));
+      const pay = await repo.addSettlement({
+        id: 'sp1',
+        bookId: B2,
+        direction: 'out',
+        counterpartyType: 'supplier',
+        counterpartyId: 'su1',
+        orderId: null,
+        amount: 50000,
+        date: '2026-06-11',
+        accountId: 'b2bank',
+        note: '付货款',
+        txnId: null,
+      });
+      expect(pay.direction).toBe('out');
+      // 跨账本付款（B1 付款引用 B2 供应商）被拒
+      await expect(
+        repo.addSettlement({
+          id: 'sp2',
+          bookId: B1,
+          direction: 'out',
+          counterpartyType: 'supplier',
+          counterpartyId: 'su1',
+          orderId: null,
+          amount: 1,
+          date: '2026-06-11',
+          accountId: 'bank',
+          note: '',
+          txnId: null,
+        }),
+      ).rejects.toThrow(/同账本/);
+      expect((await repo.listSettlements({ counterpartyId: 'su1' })).map((x) => x.id)).toEqual(['sp1']);
     });
 
     it('订单 add（行往返）+ 同账本客户校验 + list 过滤 + updateOrder 状态', async () => {

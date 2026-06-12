@@ -87,6 +87,21 @@ export interface Customer {
   archived: boolean;
 }
 
+/**
+ * 供应商档案（v0.2 C2 期）：镜像 Customer。赊购入库挂应付账款/<供应商>子科目，
+ * dueDays 为默认账期（采购到期日 = 采购日 + dueDays）。
+ */
+export interface Supplier {
+  id: string;
+  bookId: string;
+  name: string;
+  phone: string;
+  note: string;
+  /** 默认账期天数；0 = 现款现货/即时 */
+  dueDays: number;
+  archived: boolean;
+}
+
 /** 待采购 / 待发货 / 已发货 / 已完成 / 已取消。B 期仅用 待发货→已完成/已取消；其余留 C 期代采。 */
 export type OrderStatus = 'pending_purchase' | 'pending_ship' | 'shipped' | 'completed' | 'cancelled';
 

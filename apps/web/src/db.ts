@@ -1,4 +1,4 @@
-import { adjustBalanceEntry, currentAvgCost, defaultChartFor, expandEntry, orderRevenueEntry, orderTotal, toMinor } from '@app/core';
+import { adjustBalanceEntry, creditPurchaseEntry, currentAvgCost, defaultChartFor, expandEntry, orderRevenueEntry, orderTotal, toMinor } from '@app/core';
 import type { Account, Book, BookType, EntryInput } from '@app/core';
 import { InMemoryRepository } from '@app/store';
 import type { Repository } from '@app/store';
@@ -159,6 +159,19 @@ async function bootstrapDemo(): Promise<Repository> {
   await stockIn(prodA, 30, 80, daysAgo(15)); // A型工具 30 @ ¥80
   await stockIn(prodA, 10, 90, daysAgo(8)); // 再补 10 @ ¥90 → 移动加权均价 ¥82.5
   await stockIn(prodB, 50, 20, daysAgo(15)); // B型配件 50 @ ¥20
+  // 赊购入库（C2 应付）——展示「供应商 + 应付账款」：五金批发商账期30天，赊账进 B型配件 30 @ ¥18 = ¥540 应付。
+  const supId = genId();
+  await repo.addSupplier({ id: supId, bookId: biz.book.id, name: '五金批发商', phone: '', note: '', dueDays: 30, archived: false });
+  const apParentId = genId();
+  await repo.addAccount({ id: apParentId, bookId: biz.book.id, name: '应付账款', type: 'liability', parentId: null, currency: 'CNY', archived: false });
+  const apSubId = genId();
+  await repo.addAccount({ id: apSubId, bookId: biz.book.id, name: '应付账款/五金批发商', type: 'liability', parentId: apParentId, currency: 'CNY', archived: false });
+  const apBuy = creditPurchaseEntry(
+    { bookId: biz.book.id, date: daysAgo(10), amount: Math.round(30 * toMinor(18)), payableAccountId: apSubId, inventoryAccountId: invAcctId, payee: '五金批发商', note: '赊购B型配件' },
+    genId,
+  );
+  await repo.addTransaction(apBuy);
+  await repo.addInventoryMovement({ id: genId(), bookId: biz.book.id, productId: prodB, date: daysAgo(10), kind: 'in', qty: 30, unitCost: toMinor(18), orderId: null, txnId: apBuy.id, note: '赊购' });
   // 营业成本科目 + 出库结转助手（订单完成时库存品按出库时点均价结转 COGS + 记 out 流水）
   const cogsAcctId = genId();
   await repo.addAccount({ id: cogsAcctId, bookId: biz.book.id, name: '营业成本', type: 'expense', parentId: null, currency: 'CNY', archived: false });

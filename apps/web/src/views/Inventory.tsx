@@ -1,29 +1,34 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fromMinor, inventoryState, toMinor } from '@app/core';
-import type { StoredInventoryMovement, StoredProduct } from '@app/store';
+import type { StoredInventoryMovement, StoredProduct, StoredSupplier } from '@app/store';
 import type { AppData } from '../App';
 import { fmtMoney, todayISO } from '../format';
-import { recordStockIn } from '../biz';
+import { recordCreditStockIn, recordStockIn } from '../biz';
 
 export default function Inventory({ data }: { data: AppData }) {
   const { repo, book, accounts, reload } = data;
   const [products, setProducts] = useState<StoredProduct[]>([]);
   const [movements, setMovements] = useState<StoredInventoryMovement[]>([]);
+  const [suppliers, setSuppliers] = useState<StoredSupplier[]>([]);
   const [pid, setPid] = useState('');
   const [qty, setQty] = useState('');
   const [cost, setCost] = useState('');
+  const [payMode, setPayMode] = useState<'cash' | 'credit'>('cash'); // 现结 / 赊账
   const [payAcct, setPayAcct] = useState('');
+  const [supId, setSupId] = useState('');
   const [date, setDate] = useState(todayISO());
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   async function refresh(): Promise<void> {
-    const [ps, ms] = await Promise.all([
+    const [ps, ms, ss] = await Promise.all([
       repo.listProducts({ bookId: book.id }),
       repo.listInventoryMovements({ bookId: book.id }),
+      repo.listSuppliers({ bookId: book.id }),
     ]);
     setProducts(ps);
     setMovements(ms);
+    setSuppliers(ss);
   }
   useEffect(() => {
     void refresh();
@@ -36,6 +41,7 @@ export default function Inventory({ data }: { data: AppData }) {
   );
   const effProd = stockProducts.some((p) => p.id === pid) ? pid : (stockProducts[0]?.id ?? '');
   const effPay = payAccounts.some((a) => a.id === payAcct) ? payAcct : (payAccounts[0]?.id ?? '');
+  const effSup = suppliers.some((s) => s.id === supId) ? supId : (suppliers[0]?.id ?? '');
   const selProd = stockProducts.find((p) => p.id === effProd);
 
   const byProduct = useMemo(() => {
@@ -67,13 +73,22 @@ export default function Inventory({ data }: { data: AppData }) {
       setErr('请输入有效进价');
       return;
     }
-    if (!effPay) {
+    if (payMode === 'cash' && !effPay) {
       setErr('没有人民币付款账户（库存按人民币本位，进货需从 CNY 账户付）');
+      return;
+    }
+    if (payMode === 'credit' && !effSup) {
+      setErr('还没有供应商——去「供应商」页添加，再来赊账进货');
       return;
     }
     setSaving(true);
     try {
-      await recordStockIn(repo, book, { productId: effProd, qty: q, unitCost: toMinor(c), date, payAccountId: effPay, note: '' });
+      if (payMode === 'credit') {
+        const sup = suppliers.find((s) => s.id === effSup)!;
+        await recordCreditStockIn(repo, book, { productId: effProd, qty: q, unitCost: toMinor(c), date, supplier: sup, note: '' });
+      } else {
+        await recordStockIn(repo, book, { productId: effProd, qty: q, unitCost: toMinor(c), date, payAccountId: effPay, note: '' });
+      }
       setQty('');
       setCost('');
       await refresh();
@@ -119,7 +134,9 @@ export default function Inventory({ data }: { data: AppData }) {
           <p className="muted">先到「商品」页添加库存品。</p>
         ) : (
           <>
-            <p className="muted small">入库按进价计入「库存商品」，钱从所选账户付出。出库与成本结转在订单完成时自动发生。</p>
+            <p className="muted small">
+              入库按进价计入「库存商品」。现结＝钱从所选账户付出；赊账＝记应付账款/供应商（之后到「供应商」页还款）。出库与成本结转在订单完成时自动发生。
+            </p>
             <div className="qgrid">
               <label>
                 商品
@@ -145,15 +162,39 @@ export default function Inventory({ data }: { data: AppData }) {
                 />
               </label>
               <label>
-                付款账户
-                <select value={effPay} onChange={(e) => setPayAcct(e.target.value)}>
-                  {payAccounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
+                付款方式
+                <select value={payMode} onChange={(e) => setPayMode(e.target.value as 'cash' | 'credit')}>
+                  <option value="cash">现结</option>
+                  <option value="credit">赊账（记应付）</option>
                 </select>
               </label>
+              {payMode === 'cash' ? (
+                <label>
+                  付款账户
+                  <select value={effPay} onChange={(e) => setPayAcct(e.target.value)}>
+                    {payAccounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <label>
+                  供应商
+                  <select value={effSup} onChange={(e) => setSupId(e.target.value)}>
+                    {suppliers.length === 0 ? (
+                      <option value="">（先到「供应商」页添加）</option>
+                    ) : (
+                      suppliers.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </label>
+              )}
               <label>
                 日期
                 <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />

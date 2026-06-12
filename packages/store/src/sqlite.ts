@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Posting, Product, Reconciliation, Settlement, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Posting, Product, Reconciliation, Settlement, Supplier, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
@@ -20,7 +20,9 @@ import type {
   StoredReconciliation,
   StoredSetting,
   StoredSettlement,
+  StoredSupplier,
   StoredTransaction,
+  SupplierPatch,
   TxnQuery,
 } from './types';
 import {
@@ -38,6 +40,7 @@ import {
   toReconciliation,
   toSetting,
   toSettlement,
+  toSupplier,
   toTxn,
 } from './schema';
 import type {
@@ -53,6 +56,7 @@ import type {
   ReconciliationRow,
   SettingRow,
   SettlementRow,
+  SupplierRow,
   TxnRow,
 } from './schema';
 import { migrateSync } from './migrations';
@@ -434,12 +438,63 @@ export class SqliteRepository implements Repository {
     return (await this.getCustomer(id))!;
   }
 
+  // ---- 生意：供应商（C2 应付）----
+  async addSupplier(supplier: Supplier): Promise<StoredSupplier> {
+    if (this.db.prepare('SELECT 1 FROM suppliers WHERE id = ?').get(supplier.id)) {
+      throw new Error(`供应商已存在：${supplier.id}`);
+    }
+    this.assertBook(supplier.bookId);
+    const ts = this.now();
+    this.db
+      .prepare(
+        `INSERT INTO suppliers (id, book_id, name, phone, note, due_days, archived, created_at, updated_at, deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      )
+      .run(supplier.id, supplier.bookId, supplier.name, supplier.phone, supplier.note, supplier.dueDays, supplier.archived ? 1 : 0, ts, ts);
+    return (await this.getSupplier(supplier.id))!;
+  }
+
+  async getSupplier(id: string): Promise<StoredSupplier | null> {
+    const r = this.db.prepare('SELECT * FROM suppliers WHERE id = ? AND deleted = 0').get(id) as SupplierRow | undefined;
+    return r ? toSupplier(r) : null;
+  }
+
+  async listSuppliers(opts: { bookId?: string; includeArchived?: boolean } = {}): Promise<StoredSupplier[]> {
+    const cond = ['deleted = 0'];
+    const params: string[] = [];
+    if (!opts.includeArchived) cond.push('archived = 0');
+    if (opts.bookId) {
+      cond.push('book_id = ?');
+      params.push(opts.bookId);
+    }
+    const rows = this.db.prepare(`SELECT * FROM suppliers WHERE ${cond.join(' AND ')}`).all(...params) as unknown as SupplierRow[];
+    return rows.map(toSupplier);
+  }
+
+  async updateSupplier(id: string, patch: SupplierPatch): Promise<StoredSupplier> {
+    const cur = await this.getSupplier(id);
+    if (!cur) throw new Error(`供应商不存在：${id}`);
+    const next: StoredSupplier = { ...cur, ...patch, updatedAt: this.now() };
+    this.db
+      .prepare(`UPDATE suppliers SET name=?, phone=?, note=?, due_days=?, archived=?, updated_at=? WHERE id=?`)
+      .run(next.name, next.phone, next.note, next.dueDays, next.archived ? 1 : 0, next.updatedAt, id);
+    return (await this.getSupplier(id))!;
+  }
+
   // ---- 生意：订单 ----
   private customerBookId(id: string): string {
     const r = this.db.prepare('SELECT book_id FROM customers WHERE id = ? AND deleted = 0').get(id) as
       | { book_id: string }
       | undefined;
     if (!r) throw new Error(`客户不存在：${id}`);
+    return r.book_id;
+  }
+
+  private supplierBookId(id: string): string {
+    const r = this.db.prepare('SELECT book_id FROM suppliers WHERE id = ? AND deleted = 0').get(id) as
+      | { book_id: string }
+      | undefined;
+    if (!r) throw new Error(`供应商不存在：${id}`);
     return r.book_id;
   }
 
@@ -531,6 +586,10 @@ export class SqliteRepository implements Repository {
     if (settlement.counterpartyType === 'customer') {
       if (this.customerBookId(settlement.counterpartyId) !== settlement.bookId) {
         throw new Error('收款客户必须与收款同账本');
+      }
+    } else if (settlement.counterpartyType === 'supplier') {
+      if (this.supplierBookId(settlement.counterpartyId) !== settlement.bookId) {
+        throw new Error('付款供应商必须与付款同账本');
       }
     }
     if (settlement.orderId !== null) {

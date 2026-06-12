@@ -1,6 +1,6 @@
 import Database from '@tauri-apps/plugin-sql';
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Posting, Product, Reconciliation, Settlement, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Posting, Product, Reconciliation, Settlement, Supplier, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
@@ -20,7 +20,9 @@ import type {
   StoredReconciliation,
   StoredSetting,
   StoredSettlement,
+  StoredSupplier,
   StoredTransaction,
+  SupplierPatch,
   TxnQuery,
 } from './types';
 import {
@@ -38,6 +40,7 @@ import {
   toReconciliation,
   toSetting,
   toSettlement,
+  toSupplier,
   toTxn,
 } from './schema';
 import type {
@@ -53,6 +56,7 @@ import type {
   ReconciliationRow,
   SettingRow,
   SettlementRow,
+  SupplierRow,
   TxnRow,
 } from './schema';
 import { migrate } from './migrations';
@@ -426,6 +430,49 @@ export class TauriSqlRepository implements Repository {
     return (await this.getCustomer(id))!;
   }
 
+  // ---- 生意：供应商（C2 应付）----
+  async addSupplier(supplier: Supplier): Promise<StoredSupplier> {
+    if (await this.exists('SELECT 1 FROM suppliers WHERE id = $1', [supplier.id])) {
+      throw new Error(`供应商已存在：${supplier.id}`);
+    }
+    await this.assertBook(supplier.bookId);
+    const ts = this.now();
+    await this.db.execute(
+      `INSERT INTO suppliers (id, book_id, name, phone, note, due_days, archived, created_at, updated_at, deleted)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0)`,
+      [supplier.id, supplier.bookId, supplier.name, supplier.phone, supplier.note, supplier.dueDays, supplier.archived ? 1 : 0, ts, ts],
+    );
+    return (await this.getSupplier(supplier.id))!;
+  }
+
+  async getSupplier(id: string): Promise<StoredSupplier | null> {
+    const rows = await this.db.select<SupplierRow[]>('SELECT * FROM suppliers WHERE id = $1 AND deleted = 0', [id]);
+    return rows[0] ? toSupplier(rows[0]) : null;
+  }
+
+  async listSuppliers(opts: { bookId?: string; includeArchived?: boolean } = {}): Promise<StoredSupplier[]> {
+    const cond = ['deleted = 0'];
+    const params: unknown[] = [];
+    if (!opts.includeArchived) cond.push('archived = 0');
+    if (opts.bookId) {
+      params.push(opts.bookId);
+      cond.push(`book_id = $${params.length}`);
+    }
+    const rows = await this.db.select<SupplierRow[]>(`SELECT * FROM suppliers WHERE ${cond.join(' AND ')}`, params);
+    return rows.map(toSupplier);
+  }
+
+  async updateSupplier(id: string, patch: SupplierPatch): Promise<StoredSupplier> {
+    const cur = await this.getSupplier(id);
+    if (!cur) throw new Error(`供应商不存在：${id}`);
+    const next: StoredSupplier = { ...cur, ...patch, updatedAt: this.now() };
+    await this.db.execute(
+      'UPDATE suppliers SET name=$1, phone=$2, note=$3, due_days=$4, archived=$5, updated_at=$6 WHERE id=$7',
+      [next.name, next.phone, next.note, next.dueDays, next.archived ? 1 : 0, next.updatedAt, id],
+    );
+    return (await this.getSupplier(id))!;
+  }
+
   // ---- 生意：订单 ----
   private async customerBookId(id: string): Promise<string> {
     const rows = await this.db.select<Array<{ book_id: string }>>(
@@ -433,6 +480,15 @@ export class TauriSqlRepository implements Repository {
       [id],
     );
     if (!rows[0]) throw new Error(`客户不存在：${id}`);
+    return rows[0].book_id;
+  }
+
+  private async supplierBookId(id: string): Promise<string> {
+    const rows = await this.db.select<Array<{ book_id: string }>>(
+      'SELECT book_id FROM suppliers WHERE id = $1 AND deleted = 0',
+      [id],
+    );
+    if (!rows[0]) throw new Error(`供应商不存在：${id}`);
     return rows[0].book_id;
   }
 
@@ -531,6 +587,10 @@ export class TauriSqlRepository implements Repository {
     if (settlement.counterpartyType === 'customer') {
       if ((await this.customerBookId(settlement.counterpartyId)) !== settlement.bookId) {
         throw new Error('收款客户必须与收款同账本');
+      }
+    } else if (settlement.counterpartyType === 'supplier') {
+      if ((await this.supplierBookId(settlement.counterpartyId)) !== settlement.bookId) {
+        throw new Error('付款供应商必须与付款同账本');
       }
     }
     if (settlement.orderId !== null) {

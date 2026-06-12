@@ -1,5 +1,5 @@
-import { accountBalance, allocateCustomerPayments, collectionEntry, convertAmount, expandEntry, inventoryState, orderRevenueEntry, orderTotal } from '@app/core';
-import type { AccountType, ConvertCtx, Customer, CustomerPayment, Order, OrderPaymentStatus } from '@app/core';
+import { accountBalance, allocateCustomerPayments, collectionEntry, convertAmount, creditPurchaseEntry, expandEntry, inventoryState, orderRevenueEntry, orderTotal, supplierPaymentEntry } from '@app/core';
+import type { AccountType, ConvertCtx, Customer, CustomerPayment, Order, OrderPaymentStatus, Supplier } from '@app/core';
 import type { Repository, StoredAccount, StoredBook, StoredCustomer, StoredOrder, StoredSettlement, StoredTransaction } from '@app/store';
 import { genId } from './db';
 
@@ -361,5 +361,158 @@ export async function recordStockIn(
     orderId: null,
     txnId: entry.id,
     note: opts.note,
+  });
+}
+
+// —— C2 应付（供应商赊购 + 还款）——
+// 镜像 AR：应付按「供应商 × 币种」建子科目，挂顶层「应付账款」(负债)下。C2c 仅 CNY（外币采购后置），
+// 但保留币种参数与命名规则（CNY=`应付账款/<名>`，非 CNY 追加 ` (币种)`）便于后续扩展。
+const AP_PARENT = '应付账款';
+
+/** 应付子科目名：CNY 沿用 `应付账款/<名>`，非 CNY 追加 ` (币种)`。 */
+const apName = (supplierName: string, currency: string): string =>
+  currency === 'CNY' ? `${AP_PARENT}/${supplierName}` : `${AP_PARENT}/${supplierName} (${currency})`;
+
+/** 某供应商的全部应付子科目（含各币种）。 */
+function supplierApAccounts(accounts: StoredAccount[], supplierName: string): StoredAccount[] {
+  const base = `${AP_PARENT}/${supplierName}`;
+  return accounts.filter((a) => a.type === 'liability' && (a.name === base || a.name.startsWith(`${base} (`)));
+}
+
+/** 某供应商当前应付余额（折算到展示币种）：正=你欠供应商，负=你已预付。负债账户余额为负，故取负。 */
+export function payableBalance(
+  accounts: StoredAccount[],
+  txns: StoredTransaction[],
+  supplierName: string,
+  convert: ConvertCtx,
+): number {
+  let sum = 0;
+  for (const a of supplierApAccounts(accounts, supplierName)) {
+    sum += -convertAmount(accountBalance(txns, a.id), a.currency, convert);
+  }
+  return sum;
+}
+
+/** 全账本应付汇总（折算到展示币种）：应付合计（你欠供应商）/ 预付合计（你已预付）。 */
+export function payableSummary(
+  accounts: StoredAccount[],
+  txns: StoredTransaction[],
+  convert: ConvertCtx,
+): { payable: number; prepaid: number } {
+  let payable = 0;
+  let prepaid = 0;
+  for (const a of accounts) {
+    if (a.type !== 'liability' || !a.name.startsWith(`${AP_PARENT}/`)) continue;
+    const owed = -convertAmount(accountBalance(txns, a.id), a.currency, convert); // 正=欠供应商
+    if (owed > 0) payable += owed;
+    else if (owed < 0) prepaid += -owed;
+  }
+  return { payable, prepaid };
+}
+
+/** 找/建顶层「应付账款」负债父科目，返回 id。 */
+async function ensurePayableParent(repo: Repository, book: StoredBook, accounts: StoredAccount[]): Promise<string> {
+  const parent = accounts.find((a) => a.type === 'liability' && a.name === AP_PARENT && a.parentId === null);
+  if (parent) return parent.id;
+  const created = await repo.addAccount({
+    id: genId(),
+    bookId: book.id,
+    name: AP_PARENT,
+    type: 'liability',
+    parentId: null,
+    currency: 'CNY', // 容器节点（无分录），各币种应付落各子科目
+    archived: false,
+  });
+  return created.id;
+}
+
+/** 找/建某供应商某币种的应付子科目，返回账户 id（已归档则恢复）。 */
+async function ensurePayableAccount(repo: Repository, book: StoredBook, supplier: Supplier, currency: string): Promise<string> {
+  const accounts = await repo.listAccounts({ bookId: book.id, includeArchived: true });
+  const existing = accounts.find((a) => a.type === 'liability' && a.name === apName(supplier.name, currency));
+  if (existing) {
+    if (existing.archived) await repo.updateAccount(existing.id, { archived: false });
+    return existing.id;
+  }
+  const parentId = await ensurePayableParent(repo, book, accounts);
+  const created = await repo.addAccount({
+    id: genId(),
+    bookId: book.id,
+    name: apName(supplier.name, currency),
+    type: 'liability',
+    parentId,
+    currency,
+    archived: false,
+  });
+  return created.id;
+}
+
+/** 供应商改名时同步其全部应付子科目名（各币种），避免下次成单另建子科目、欠款余额分裂。 */
+export async function renameSupplier(repo: Repository, book: StoredBook, oldName: string, newName: string): Promise<void> {
+  const accounts = await repo.listAccounts({ bookId: book.id, includeArchived: true });
+  const oldBase = `${AP_PARENT}/${oldName}`;
+  const newBase = `${AP_PARENT}/${newName}`;
+  for (const ap of supplierApAccounts(accounts, oldName)) {
+    await repo.updateAccount(ap.id, { name: newBase + ap.name.slice(oldBase.length) });
+  }
+}
+
+/**
+ * 赊购入库：借 库存商品 / 贷 应付账款/供应商（CNY 本位），并记一条 in 出入库流水（带进价）。
+ * 与 recordStockIn 的区别仅在贷方——这里贷应付（欠供应商），而非贷付款资产账户。
+ */
+export async function recordCreditStockIn(
+  repo: Repository,
+  book: StoredBook,
+  opts: { productId: string; qty: number; unitCost: number; date: string; supplier: Supplier; note: string },
+): Promise<void> {
+  if (opts.qty <= 0) throw new Error('进货数量必须为正数');
+  const amount = Math.round(opts.qty * opts.unitCost);
+  if (amount <= 0) throw new Error('进货金额为 0');
+  const invId = await ensureInventoryAccount(repo, book);
+  const apId = await ensurePayableAccount(repo, book, opts.supplier, 'CNY');
+  const entry = creditPurchaseEntry(
+    { bookId: book.id, date: opts.date, amount, currency: 'CNY', payableAccountId: apId, inventoryAccountId: invId, payee: opts.supplier.name, note: opts.note },
+    genId,
+  );
+  await repo.addTransaction(entry);
+  await repo.addInventoryMovement({
+    id: genId(),
+    bookId: book.id,
+    productId: opts.productId,
+    date: opts.date,
+    kind: 'in',
+    qty: opts.qty,
+    unitCost: opts.unitCost,
+    orderId: null,
+    txnId: entry.id,
+    note: opts.note,
+  });
+}
+
+/** 付供应商货款：钱从付款资产账户(CNY)转入 应付账款/供应商（冲减欠款），并落 Settlement(out/supplier) 记录。 */
+export async function recordSupplierPayment(
+  repo: Repository,
+  book: StoredBook,
+  opts: { supplier: Supplier; amount: number; date: string; assetAccountId: string; note: string },
+): Promise<void> {
+  const apId = await ensurePayableAccount(repo, book, opts.supplier, 'CNY');
+  const entry = supplierPaymentEntry(
+    { bookId: book.id, date: opts.date, amount: opts.amount, currency: 'CNY', payableAccountId: apId, assetAccountId: opts.assetAccountId, payee: opts.supplier.name, note: opts.note },
+    genId,
+  );
+  await repo.addTransaction(entry);
+  await repo.addSettlement({
+    id: genId(),
+    bookId: book.id,
+    direction: 'out',
+    counterpartyType: 'supplier',
+    counterpartyId: opts.supplier.id,
+    orderId: null,
+    amount: opts.amount,
+    date: opts.date,
+    accountId: opts.assetAccountId,
+    note: opts.note,
+    txnId: entry.id,
   });
 }

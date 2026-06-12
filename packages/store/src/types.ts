@@ -1,4 +1,4 @@
-import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Product, Reconciliation, Settlement, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Product, Reconciliation, Settlement, Supplier, Transaction } from '@app/core';
 
 /** 每条记录都带的同步元数据，为将来的云同步预留。 */
 export interface SyncMeta {
@@ -13,6 +13,7 @@ export type StoredAccount = Account & SyncMeta;
 export type StoredTransaction = Transaction & SyncMeta;
 export type StoredBudget = Budget & SyncMeta;
 export type StoredCustomer = Customer & SyncMeta;
+export type StoredSupplier = Supplier & SyncMeta;
 export type StoredOrder = Order & SyncMeta;
 export type StoredSettlement = Settlement & SyncMeta;
 export type StoredProduct = Product & SyncMeta;
@@ -59,6 +60,9 @@ export interface CustomerPatch {
   dueDays?: number;
   archived?: boolean;
 }
+
+/** 供应商可改字段（结构同 CustomerPatch）。 */
+export type SupplierPatch = CustomerPatch;
 
 /** B 期订单创建后行不可改（改 = 取消重建）；只允许改状态/备注/收入分录关联。 */
 export interface OrderPatch {
@@ -127,6 +131,12 @@ export interface Repository {
   getCustomer(id: string): Promise<StoredCustomer | null>;
   listCustomers(opts?: { bookId?: string; includeArchived?: boolean }): Promise<StoredCustomer[]>;
   updateCustomer(id: string, patch: CustomerPatch): Promise<StoredCustomer>;
+
+  // 供应商（v0.2 C2 期，应付）：镜像客户。赊购入库挂应付账款/<供应商>子科目。
+  addSupplier(supplier: Supplier): Promise<StoredSupplier>;
+  getSupplier(id: string): Promise<StoredSupplier | null>;
+  listSuppliers(opts?: { bookId?: string; includeArchived?: boolean }): Promise<StoredSupplier[]>;
+  updateSupplier(id: string, patch: SupplierPatch): Promise<StoredSupplier>;
 
   addOrder(order: Order): Promise<StoredOrder>;
   getOrder(id: string): Promise<StoredOrder | null>;

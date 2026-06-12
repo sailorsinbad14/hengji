@@ -1,5 +1,5 @@
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Product, Reconciliation, Settlement, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Product, Reconciliation, Settlement, Supplier, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
@@ -19,7 +19,9 @@ import type {
   StoredReconciliation,
   StoredSetting,
   StoredSettlement,
+  StoredSupplier,
   StoredTransaction,
+  SupplierPatch,
   TxnQuery,
 } from './types';
 
@@ -42,6 +44,7 @@ export class InMemoryRepository implements Repository {
   private readonly txns = new Map<string, StoredTransaction>();
   private readonly budgets = new Map<string, StoredBudget>();
   private readonly customers = new Map<string, StoredCustomer>();
+  private readonly suppliers = new Map<string, StoredSupplier>();
   private readonly orders = new Map<string, StoredOrder>();
   private readonly settlements = new Map<string, StoredSettlement>();
   private readonly products = new Map<string, StoredProduct>();
@@ -267,11 +270,51 @@ export class InMemoryRepository implements Repository {
     return clone(updated);
   }
 
+  // ---- 生意：供应商（C2 应付）----
+  async addSupplier(supplier: Supplier): Promise<StoredSupplier> {
+    if (this.suppliers.has(supplier.id)) throw new Error(`供应商已存在：${supplier.id}`);
+    this.liveBook(supplier.bookId);
+    const ts = this.now();
+    const stored: StoredSupplier = { ...clone(supplier), createdAt: ts, updatedAt: ts, deleted: false };
+    this.suppliers.set(supplier.id, stored);
+    return clone(stored);
+  }
+
+  async getSupplier(id: string): Promise<StoredSupplier | null> {
+    const s = this.suppliers.get(id);
+    return s && !s.deleted ? clone(s) : null;
+  }
+
+  async listSuppliers(opts: { bookId?: string; includeArchived?: boolean } = {}): Promise<StoredSupplier[]> {
+    const out: StoredSupplier[] = [];
+    for (const s of this.suppliers.values()) {
+      if (s.deleted) continue;
+      if (!opts.includeArchived && s.archived) continue;
+      if (opts.bookId && s.bookId !== opts.bookId) continue;
+      out.push(clone(s));
+    }
+    return out;
+  }
+
+  async updateSupplier(id: string, patch: SupplierPatch): Promise<StoredSupplier> {
+    const s = this.suppliers.get(id);
+    if (!s || s.deleted) throw new Error(`供应商不存在：${id}`);
+    const updated: StoredSupplier = { ...s, ...patch, updatedAt: this.now() };
+    this.suppliers.set(id, updated);
+    return clone(updated);
+  }
+
   // ---- 生意：订单 ----
   private liveCustomer(id: string): StoredCustomer {
     const c = this.customers.get(id);
     if (!c || c.deleted) throw new Error(`客户不存在：${id}`);
     return c;
+  }
+
+  private liveSupplier(id: string): StoredSupplier {
+    const s = this.suppliers.get(id);
+    if (!s || s.deleted) throw new Error(`供应商不存在：${id}`);
+    return s;
   }
 
   async addOrder(order: Order): Promise<StoredOrder> {
@@ -317,6 +360,9 @@ export class InMemoryRepository implements Repository {
     if (settlement.counterpartyType === 'customer') {
       const cust = this.liveCustomer(settlement.counterpartyId);
       if (cust.bookId !== settlement.bookId) throw new Error('收款客户必须与收款同账本');
+    } else if (settlement.counterpartyType === 'supplier') {
+      const sup = this.liveSupplier(settlement.counterpartyId);
+      if (sup.bookId !== settlement.bookId) throw new Error('付款供应商必须与付款同账本');
     }
     if (settlement.orderId !== null) {
       const o = this.orders.get(settlement.orderId);

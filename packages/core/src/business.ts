@@ -74,6 +74,54 @@ export function collectionEntry(
   );
 }
 
+/**
+ * 赊购入库（C2 应付）：借 库存商品（资产+），贷 应付账款/供应商（负债+，欠款增）。
+ * transfer 展开：fromAccountId=应付子科目，toAccountId=库存商品。负债账户余额为负，欠得越多越负。
+ */
+export function creditPurchaseEntry(
+  opts: EntryOpts & { payableAccountId: string; inventoryAccountId: string },
+  genId: () => string,
+): Transaction {
+  return expandEntry(
+    {
+      kind: 'transfer',
+      bookId: opts.bookId,
+      date: opts.date,
+      amount: opts.amount,
+      fromAccountId: opts.payableAccountId,
+      toAccountId: opts.inventoryAccountId,
+      payee: opts.payee,
+      note: opts.note,
+      currency: opts.currency,
+    },
+    genId,
+  );
+}
+
+/**
+ * 付供应商货款：钱从付款资产账户转入 应付账款/供应商（冲减欠款）。
+ * transfer 展开：fromAccountId=付款资产账户，toAccountId=应付子科目。净资产不变，应付转为现金流出。
+ */
+export function supplierPaymentEntry(
+  opts: EntryOpts & { payableAccountId: string; assetAccountId: string },
+  genId: () => string,
+): Transaction {
+  return expandEntry(
+    {
+      kind: 'transfer',
+      bookId: opts.bookId,
+      date: opts.date,
+      amount: opts.amount,
+      fromAccountId: opts.assetAccountId,
+      toAccountId: opts.payableAccountId,
+      payee: opts.payee,
+      note: opts.note,
+      currency: opts.currency,
+    },
+    genId,
+  );
+}
+
 /** 单个订单的收款状态。 */
 export type OrderPaymentStatus = 'unpaid' | 'partial' | 'paid';
 
