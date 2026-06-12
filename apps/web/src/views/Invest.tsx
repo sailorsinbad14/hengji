@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { accountBalance, adjustBalanceEntry, toMinor } from '@app/core';
+import { accountBalance, adjustBalanceEntry, convertAmount, toMinor } from '@app/core';
 import type { AppData } from '../App';
 import { genId } from '../db';
 import { currencyDef, fmtMoney, todayISO } from '../format';
 
 export default function Invest({ data }: { data: AppData }) {
-  const { accounts, txns, repo, reload, book } = data;
+  const { accounts, txns, repo, reload, book, convert } = data;
   const assets = accounts.filter((a) => a.type === 'asset');
   const pnl = accounts.find((a) => a.name === '投资盈亏');
   const [accId, setAccId] = useState('');
@@ -17,7 +17,19 @@ export default function Invest({ data }: { data: AppData }) {
   if (!eff || !pnl) return <p className="muted">本账本缺少投资科目（投资账户 / 投资盈亏）。</p>;
 
   const balance = accountBalance(txns, eff.id);
-  const cumPnl = -accountBalance(txns, pnl.id); // 收入科目余额为负 → 翻正即累计盈亏
+  // 累计盈亏：投资盈亏科目各币种 posting 折算到展示币种后求和再翻正（多投资账户可不同币种，原币不可直接相加）
+  const display = convert.display;
+  let pnlMinor = 0;
+  const pnlCurrencies = new Set<string>();
+  for (const t of txns) {
+    for (const p of t.postings) {
+      if (p.accountId !== pnl.id) continue;
+      pnlMinor += convertAmount(p.amount, p.currency, convert);
+      pnlCurrencies.add(p.currency);
+    }
+  }
+  const cumPnl = -pnlMinor; // 收入科目余额为负 → 翻正即累计盈亏
+  const pnlConverted = [...pnlCurrencies].some((c) => c !== display); // 含非展示币种 → 标注折合
   const dec = currencyDef(eff.currency).decimals; // 现值更新/显示按账户币种精度
 
   async function save(): Promise<void> {
@@ -63,8 +75,8 @@ export default function Invest({ data }: { data: AppData }) {
           <div className="v">{fmtMoney(balance, eff.currency)}</div>
         </div>
         <div className="stat">
-          <div className="k">累计投资盈亏</div>
-          <div className={`v sm ${cumPnl >= 0 ? 'pos' : 'neg'}`}>{(cumPnl > 0 ? '+' : '') + fmtMoney(cumPnl)}</div>
+          <div className="k">累计投资盈亏{pnlConverted ? `（折合${currencyDef(display).name}）` : ''}</div>
+          <div className={`v sm ${cumPnl >= 0 ? 'pos' : 'neg'}`}>{(cumPnl > 0 ? '+' : '') + fmtMoney(cumPnl, display)}</div>
         </div>
       </div>
       <div className="card">

@@ -193,6 +193,22 @@ async function bootstrapDemo(): Promise<Repository> {
       genId,
     ),
   );
+  // 美股账户（美元）——展示「投资盈亏跨币聚合」：$1,000 → $1,100，浮盈 $100（USD）。
+  // 累计盈亏 = ¥230 + $100 折合，证明跨币种 PnL 折算后相加。
+  const usStockId = genId();
+  await repo.addAccount({ id: usStockId, bookId: inv.book.id, name: '美股账户', type: 'asset', parentId: null, currency: 'USD', archived: false });
+  await repo.addTransaction(
+    adjustBalanceEntry(
+      { bookId: inv.book.id, date: daysAgo(20), accountId: usStockId, currentBalance: 0, targetValue: toMinor(1000), counterAccountId: inv.byName('期初余额'), currency: 'USD', note: '期初余额' },
+      genId,
+    ),
+  );
+  await repo.addTransaction(
+    adjustBalanceEntry(
+      { bookId: inv.book.id, date: daysAgo(1), accountId: usStockId, currentBalance: toMinor(1000), targetValue: toMinor(1100), counterAccountId: inv.byName('投资盈亏'), currency: 'USD', note: '更新投资现值' },
+      genId,
+    ),
+  );
 
   return repo;
 }
