@@ -58,7 +58,14 @@
 **✅ Phase 2a 换汇录入已落地**：core `forexEntry`(两条原币腿、不自动记汇损、多币种豁免平衡)；QuickEntry 转账选不同币种账户→自动变换汇(汇出+到账两个原币金额)、走 forexEntry；`describeTxn` 换汇用 💱 显示两腿原币。汇损/益隐含在原币余额差、仅折算总值时体现。
 **✅ 多币种开关（默认关）**：设置页「多币种」卡顶部开关(app 级 `multiCurrency`，默认关)。关时纯人民币 UI——隐藏币种管理表 + 建账户的币种选择(`AppData.mcEnabled` 门控 Accounts 币种下拉)。展示层(折合/分组 chip)本就按实际数据自适应，纯 CNY 用户自然不出现；已有外币数据即便关也如实显示(关只藏控件不强转数据)。演示版 seed 开关=on 展示多币种。
 **✅ Phase 2b 用户自管币种 + 可变精度已落地**：币种改为**用户自管注册表**(app 级 setting `currencies` JSON 数组 [{code,symbol,name,decimals,rate}]，CNY 本位恒在不可删)。设置页「币种」卡可增/删/改名改符号改小数位改汇率(在用币种禁删、禁改小数位——防错读已记金额)。`format.ts` 模块级注册表 + `setCurrencyRegistry`(App 加载设置后注入) + `currencyDef`/`currencyList`/`fmtMoney`(按币种符号+小数位)。**可变精度**：`ConvertCtx` 加 `scales`，`convertAmount` 跨小数位折算 `round(minor×rate×10^(sD−sF))`；toMinor 按币种 decimals(QuickEntry/Reconcile)。实测 BTC(8位 ₿0.05)/JPY(0位 JP¥)/USD(2位)同总表折合正确。
-**⏳ Phase 2 剩余**：展示币种可切换(目前固定 CNY)；多币子账户 parentId 分组显示；业务账本 AR 多币种。
+**✅ Phase 2 收尾已落地（2026-06-12）**：
+- **① 展示币种可切换**：app 级 `displayCurrency` 设置 + 设置页下拉；`convertCtxOf` 按所选展示币种（多币种关闭时强制 CNY）。Dashboard/财务总表净资产/收支/各账本卡按展示币种折算，标头「折合<币种名>」按是否持有非展示币种判定。**修了 `convertAmount` 的隐含假设**——rates 一律相对 CNY，旧式 `minor×rate[from]` 仅 display=CNY 时成立，非 CNY 展示需除以 `rate[display]`。
+- **③ 业务账本 AR 多币种**：`Order.currency`（store M8）；应收子科目按「客户×币种」——CNY 沿用 `应收账款/<名>`、非 CNY 用 `应收账款/<名> (币种)`。`completeOrder`/`recordCollection` 按订单币种；收款进同币种资产账户；收款摊单(FIFO)按「客户×币种」分组；`receivableBalance`/`receivableSummary` 各币种折算到展示币种归并。**同一客户可在不同币种各欠一笔**。
+- **④ 多币种预算**：`budgetUsage` 加可选 `convert`，外币支出按汇率折入；预算固定**人民币本位**（不随展示币种波动）。
+- **⑤ 投资盈亏跨币聚合**：累计盈亏遍历投资盈亏科目 posting 按币种折算到展示币种再求和（多投资账户可不同币种）。
+- **⏸ 多币子账户 parentId 分组**：用户决定**不做**（每币种单独开账户即可，不嵌套）。
+
+**多币种主体至此完成。**
 
 - **币种以账户为单位**：`Account.currency` 启用；**资产/负债账户单一币种**（一家多币银行＝拆成 N 个单币子账户，用 parentId 父节点分组显示）；**收入/支出分类可跨币聚合**（报表时折算）。
 - **每条 posting 的币种 = 其账户的币种**。
