@@ -146,7 +146,9 @@ export default function Orders({ data }: { data: AppData }) {
       setLine(key, { productId: '' });
       return;
     }
-    setLine(key, { productId, name: p.name, price: String(fromMinor(p.salePrice)) });
+    // 商品售价存人民币；订单结算币种非人民币时，按设置里的汇率折算后填入（用户可再手改）。
+    const priceMinor = convertAmount(p.salePrice, 'CNY', { rates: convert.rates, scales: convert.scales, display: oCur });
+    setLine(key, { productId, name: p.name, price: String(fromMinor(priceMinor, oDecimals)) });
   }
 
   async function save(): Promise<void> {
