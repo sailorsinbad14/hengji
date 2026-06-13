@@ -30,6 +30,7 @@ export default function Accounts({ data }: { data: AppData }) {
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<AccountType>('expense');
   const [newCurrency, setNewCurrency] = useState('CNY');
+  const [newGlobal, setNewGlobal] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   async function refresh(): Promise<void> {
@@ -42,6 +43,13 @@ export default function Accounts({ data }: { data: AppData }) {
   const usable = all.filter((a) => !a.deleted);
   // 仅开启多币种 + 资产/负债账户才可选币种；其余沿用人民币
   const currencyMatters = data.mcEnabled && (newType === 'asset' || newType === 'liability');
+  // 仅"真金白银"账户可设为共享：资产/负债，且非自动托管/虚拟账户（应收应付/库存/代采在途）
+  const VIRTUAL = new Set(['库存商品', '代采在途成本']);
+  const isManaged = (name: string): boolean =>
+    name === '应收账款' || name.startsWith('应收账款/') || name === '应付账款' || name.startsWith('应付账款/');
+  const canShare = (a: StoredAccount): boolean =>
+    (a.type === 'asset' || a.type === 'liability') && !isManaged(a.name) && !VIRTUAL.has(a.name);
+  const shareableType = newType === 'asset' || newType === 'liability';
 
   async function add(): Promise<void> {
     setErr(null);
@@ -55,8 +63,16 @@ export default function Accounts({ data }: { data: AppData }) {
       return;
     }
     const currency = currencyMatters ? newCurrency : 'CNY';
-    await repo.addAccount({ id: genId(), bookId: book.id, name, type: newType, parentId: null, currency, archived: false });
+    await repo.addAccount({ id: genId(), bookId: book.id, name, type: newType, parentId: null, currency, global: shareableType && newGlobal, archived: false });
     setNewName('');
+    setNewGlobal(false);
+    await refresh();
+    await reload();
+  }
+
+  /** 切换账户的"共享给所有账本"（仅真金白银账户）。 */
+  async function toggleGlobal(a: StoredAccount): Promise<void> {
+    await repo.updateAccount(a.id, { global: !a.global });
     await refresh();
     await reload();
   }
@@ -125,6 +141,7 @@ export default function Accounts({ data }: { data: AppData }) {
                       <span className={`bname${a.archived ? ' muted' : ''}`}>
                         {a.name}
                         {showBal && a.currency !== 'CNY' && <span className="chip"> {a.currency}</span>}
+                        {a.global && <span className="chip"> 全局共享</span>}
                         {a.archived && <span className="chip"> 已归档</span>}
                       </span>
                     )}
@@ -152,6 +169,11 @@ export default function Accounts({ data }: { data: AppData }) {
                           >
                             改名
                           </button>
+                          {canShare(a) && !a.archived && (
+                            <button className="lnk" onClick={() => void toggleGlobal(a)} title="共享账户对所有账本可见、对账按账户跨账本">
+                              {a.global ? '取消共享' : '设为共享'}
+                            </button>
+                          )}
                           <button className={`lnk${a.archived ? '' : ' danger'}`} onClick={() => void toggleArchive(a)}>
                             {a.archived ? '恢复' : '归档'}
                           </button>
@@ -203,6 +225,11 @@ export default function Accounts({ data }: { data: AppData }) {
             </label>
           )}
         </div>
+        {shareableType && (
+          <label className="chkline">
+            <input type="checkbox" checked={newGlobal} onChange={(e) => setNewGlobal(e.target.checked)} /> 共享给所有账本（真金白银账户，如公用的支付宝/银行卡——生意和生活混用同一账户时勾选）
+          </label>
+        )}
         <p className="muted" style={{ marginBottom: 10 }}>
           {GROUPS.find((g) => g.type === newType)?.hint}
         </p>
