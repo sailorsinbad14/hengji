@@ -143,8 +143,10 @@ async function bootstrapDemo(): Promise<Repository> {
   for (const e of bizEntries) await repo.addTransaction(expandEntry(e, genId));
   const prodA = genId();
   const prodB = genId();
-  await repo.addProduct({ id: prodA, bookId: biz.book.id, name: 'A型工具', costPrice: toMinor(80), salePrice: toMinor(125), isStock: true, dropship: false, unit: '个', archived: false });
-  await repo.addProduct({ id: prodB, bookId: biz.book.id, name: 'B型配件', costPrice: toMinor(20), salePrice: toMinor(50), isStock: true, dropship: false, unit: '个', archived: false });
+  await repo.addProduct({ id: prodA, bookId: biz.book.id, name: 'A型工具', costPrice: toMinor(80), salePrice: toMinor(125), quoteOnly: false, unit: '个', archived: false });
+  await repo.addProduct({ id: prodB, bookId: biz.book.id, name: 'B型配件', costPrice: toMinor(20), salePrice: toMinor(50), quoteOnly: false, unit: '个', archived: false });
+  // 纯报价/服务（C2 模型重构）：设计费——不做库存、不进成本，开单可单列一行。
+  await repo.addProduct({ id: genId(), bookId: biz.book.id, name: '设计费', costPrice: 0, salePrice: toMinor(500), quoteOnly: true, unit: '次', archived: false });
   // 库存（C2）：给两个库存品补货，展示在手/移动加权均价/库存值。库存商品 CNY 本位，钱从对公账户付。
   const invAcctId = genId();
   await repo.addAccount({ id: invAcctId, bookId: biz.book.id, name: '库存商品', type: 'asset', parentId: null, currency: 'CNY', archived: false });
@@ -211,14 +213,20 @@ async function bootstrapDemo(): Promise<Repository> {
   await issueStock(orderId, prodA, 10, daysAgo(2)); // 出库 10 个 A型工具，结转 COGS（毛利 ¥1250−¥825=¥425）
   await repo.updateOrder(orderId, { status: 'completed', revenueTxnId: rev.id });
 
-  // 代采品 + 一张「待采购」订单（C2d）——展示「为此单采购」流程：定制礼盒接单后才采购，成本直挂订单。
+  // 一张「待采购」订单（C2 模型重构）——展示「不足自动采购」流程：定制礼盒在手 0，开单即生成待采购草稿单。
   const prodDrop = genId();
-  await repo.addProduct({ id: prodDrop, bookId: biz.book.id, name: '定制礼盒', costPrice: toMinor(60), salePrice: toMinor(150), isStock: false, dropship: true, unit: '个', archived: false });
+  await repo.addProduct({ id: prodDrop, bookId: biz.book.id, name: '定制礼盒', costPrice: toMinor(60), salePrice: toMinor(150), quoteOnly: false, unit: '个', archived: false });
   const dropOrderId = genId();
   await repo.addOrder({
     id: dropOrderId, bookId: biz.book.id, customerId: custId, date: daysAgo(1), currency: 'CNY', status: 'pending_purchase',
-    note: '代采礼盒', revenueTxnId: null,
+    note: '待采购礼盒', revenueTxnId: null,
     lines: [{ id: genId(), orderId: dropOrderId, name: '定制礼盒', qty: 10, unitPrice: toMinor(150), productId: prodDrop }],
+  });
+  // 开单时在手 0 → 自动生成草稿采购单（缺 10 个，单价预填进价 ¥60，无供应商/未记账，待「为此单采购」确认）
+  const dropPurId = genId();
+  await repo.addPurchase({
+    id: dropPurId, bookId: biz.book.id, supplierId: '', orderId: dropOrderId, date: daysAgo(1), payMode: 'credit', note: '', txnId: null,
+    lines: [{ id: genId(), purchaseId: dropPurId, name: '定制礼盒', qty: 10, unitCost: toMinor(60), productId: prodDrop }],
   });
 
   // 一张美元订单——展示「业务 AR 多币种」：海外客户赊购 $1,800，应收记 USD 子科目，

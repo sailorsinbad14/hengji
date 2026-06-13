@@ -102,7 +102,11 @@ export interface Supplier {
   archived: boolean;
 }
 
-/** 待采购 / 待发货 / 已发货 / 已完成 / 已取消。B 期仅用 待发货→已完成/已取消；其余留 C 期代采。 */
+/**
+ * 待采购 / 待发货 / 已发货 / 已完成 / 已取消。
+ * 开单时若任一商品在手不足 → `pending_purchase`（同时生成待采购草稿单）；
+ * 库存充足或采购确认后 → `pending_ship`；完成 → `completed`。
+ */
 export type OrderStatus = 'pending_purchase' | 'pending_ship' | 'shipped' | 'completed' | 'cancelled';
 
 export interface OrderLine {
@@ -119,8 +123,10 @@ export interface OrderLine {
 }
 
 /**
- * 商品主数据（v0.2 C1 期）：开单时可选商品自动带价，免去重复手输。
- * isStock=true 的库存品在 C2 期接入出入库与移动加权平均成本。
+ * 商品主数据（v0.2 C1 期 → C2 模型重构）：开单时可选商品自动带价，免去重复手输。
+ * 统一库存模型：所有商品默认都做库存追踪（统一在手数，默认 0），开单不限库存，
+ * 不足部分在开单时自动生成「待采购草稿单」，确认采购即采即出（成本直挂订单、不过库存均价池）。
+ * `quoteOnly` 是反向标记：纯报价/服务行（设计费/打样费/安装费），不进成本、不触发库存与自动采购。
  */
 export interface Product {
   id: string;
@@ -130,10 +136,8 @@ export interface Product {
   costPrice: Minor;
   /** 售价（最小单位/分） */
   salePrice: Minor;
-  /** 是否库存品（库存/COGS 在 C2 期启用） */
-  isStock: boolean;
-  /** 是否代采品（dropship，C2d）：不囤库存，接单后为此单专门采购，成本直挂订单。与 isStock 互斥。 */
-  dropship: boolean;
+  /** 纯报价/服务行：不做库存追踪、不进成本、不触发自动采购。默认 false = 库存追踪。 */
+  quoteOnly: boolean;
   /** 单位（个/kg…），可空 */
   unit: string;
   archived: boolean;
@@ -177,7 +181,7 @@ export interface Settlement {
   txnId: string | null;
 }
 
-/** 采购单行（v0.2 C2d 代采）：为某订单专门采购的一项。 */
+/** 采购单行：为某订单专门采购的一项（草稿态单价 = 商品进价预填，确认时可改）。 */
 export interface PurchaseLine {
   id: string;
   purchaseId: string;
@@ -190,20 +194,24 @@ export interface PurchaseLine {
 }
 
 /**
- * 采购单（v0.2 C2d 代采）：代采品「为此单采购」——一张采购单对应一张订单（orderId）。
- * 成本计入「代采在途成本」holding 资产、订单完成时结转 COGS（不过库存池）。CNY 本位（外币采购后置）。
+ * 采购单（C2 模型重构）：「为此单采购」——一张采购单对应一张订单（orderId）。
+ * 开单时若商品在手不足，自动生成**草稿态**采购单（`supplierId=''`、`txnId=null`、行单价 = 进价预填）；
+ * 确认采购时补供应商、采购价并记账（借代采在途/贷应付 or 现金）、写 `txnId`。
+ * `txnId === null` 即草稿（尚未记账，可作废）；`txnId !== null` 即已确认。
+ * 成本计入「代采在途成本」holding 资产、订单完成时结转 COGS（不过库存均价池）。CNY 本位（外币采购后置）。
  */
 export interface Purchase {
   id: string;
   bookId: string;
+  /** 供应商 id；草稿态为 '' （确认时补） */
   supplierId: string;
-  /** 关联订单（代采=为此单采购） */
+  /** 关联订单（为此单采购） */
   orderId: string;
   date: string;
   /** 付款方式：cash=现结 / credit=赊账（记应付账款/供应商） */
   payMode: 'cash' | 'credit';
   note: string;
-  /** 采购生成的分录 id */
+  /** 采购生成的分录 id；草稿态为 null（未记账） */
   txnId: string | null;
   lines: PurchaseLine[];
 }

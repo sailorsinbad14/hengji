@@ -8,6 +8,7 @@ import type {
   CustomerPatch,
   OrderPatch,
   ProductPatch,
+  PurchasePatch,
   Repository,
   StoredAccount,
   StoredBook,
@@ -395,8 +396,11 @@ export class InMemoryRepository implements Repository {
   async addPurchase(purchase: Purchase): Promise<StoredPurchase> {
     if (this.purchases.has(purchase.id)) throw new Error(`采购单已存在：${purchase.id}`);
     this.liveBook(purchase.bookId);
-    const sup = this.liveSupplier(purchase.supplierId);
-    if (sup.bookId !== purchase.bookId) throw new Error('采购单供应商必须与采购单同账本');
+    // 草稿态（supplierId='' / 开单自动生成）暂无供应商，跳过供应商校验；确认时再补并校验。
+    if (purchase.supplierId !== '') {
+      const sup = this.liveSupplier(purchase.supplierId);
+      if (sup.bookId !== purchase.bookId) throw new Error('采购单供应商必须与采购单同账本');
+    }
     const o = this.orders.get(purchase.orderId);
     if (!o || o.deleted) throw new Error(`关联订单不存在：${purchase.orderId}`);
     if (o.bookId !== purchase.bookId) throw new Error('关联订单必须与采购单同账本');
@@ -421,6 +425,25 @@ export class InMemoryRepository implements Repository {
       out.push(clone(p));
     }
     return sortByDateDesc(out);
+  }
+
+  async updatePurchase(id: string, patch: PurchasePatch): Promise<StoredPurchase> {
+    const p = this.purchases.get(id);
+    if (!p || p.deleted) throw new Error(`采购单不存在：${id}`);
+    // 确认时补供应商：校验同账本（草稿原本 supplierId=''）
+    if (patch.supplierId !== undefined && patch.supplierId !== '') {
+      const sup = this.liveSupplier(patch.supplierId);
+      if (sup.bookId !== p.bookId) throw new Error('采购单供应商必须与采购单同账本');
+    }
+    const updated: StoredPurchase = { ...p, ...clone(patch), updatedAt: this.now() };
+    this.purchases.set(id, updated);
+    return clone(updated);
+  }
+
+  async removePurchase(id: string): Promise<void> {
+    const p = this.purchases.get(id);
+    if (!p || p.deleted) throw new Error(`采购单不存在：${id}`);
+    this.purchases.set(id, { ...p, deleted: true, updatedAt: this.now() });
   }
 
   // ---- 生意：商品 ----

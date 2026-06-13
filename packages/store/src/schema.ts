@@ -111,8 +111,8 @@ export interface ProductRow {
   name: string;
   cost_price: number;
   sale_price: number;
-  is_stock: number;
-  dropship: number;
+  /** C2 模型重构后取代 is_stock/dropship（旧列保留为死列、不再读取） */
+  quote_only: number;
   unit: string;
   archived: number;
   created_at: string;
@@ -291,8 +291,7 @@ export function toProduct(r: ProductRow): StoredProduct {
     name: r.name,
     costPrice: r.cost_price,
     salePrice: r.sale_price,
-    isStock: r.is_stock !== 0,
-    dropship: r.dropship !== 0,
+    quoteOnly: r.quote_only !== 0,
     unit: r.unit,
     archived: r.archived !== 0,
     createdAt: r.created_at,

@@ -9,6 +9,7 @@ import type {
   CustomerPatch,
   OrderPatch,
   ProductPatch,
+  PurchasePatch,
   Repository,
   StoredAccount,
   StoredBook,
@@ -665,10 +666,11 @@ export class SqliteRepository implements Repository {
     }
     this.assertBook(product.bookId);
     const ts = this.now();
+    // is_stock/dropship 为死列（C2 模型重构后不读），靠 DEFAULT 0 兜底，INSERT 不再写入。
     this.db
       .prepare(
-        `INSERT INTO products (id, book_id, name, cost_price, sale_price, is_stock, dropship, unit, archived, created_at, updated_at, deleted)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+        `INSERT INTO products (id, book_id, name, cost_price, sale_price, quote_only, unit, archived, created_at, updated_at, deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       )
       .run(
         product.id,
@@ -676,8 +678,7 @@ export class SqliteRepository implements Repository {
         product.name,
         product.costPrice,
         product.salePrice,
-        product.isStock ? 1 : 0,
-        product.dropship ? 1 : 0,
+        product.quoteOnly ? 1 : 0,
         product.unit,
         product.archived ? 1 : 0,
         ts,
@@ -710,8 +711,8 @@ export class SqliteRepository implements Repository {
     if (!cur) throw new Error(`商品不存在：${id}`);
     const next: StoredProduct = { ...cur, ...patch, updatedAt: this.now() };
     this.db
-      .prepare(`UPDATE products SET name=?, cost_price=?, sale_price=?, is_stock=?, dropship=?, unit=?, archived=?, updated_at=? WHERE id=?`)
-      .run(next.name, next.costPrice, next.salePrice, next.isStock ? 1 : 0, next.dropship ? 1 : 0, next.unit, next.archived ? 1 : 0, next.updatedAt, id);
+      .prepare(`UPDATE products SET name=?, cost_price=?, sale_price=?, quote_only=?, unit=?, archived=?, updated_at=? WHERE id=?`)
+      .run(next.name, next.costPrice, next.salePrice, next.quoteOnly ? 1 : 0, next.unit, next.archived ? 1 : 0, next.updatedAt, id);
     return (await this.getProduct(id))!;
   }
 
@@ -726,7 +727,10 @@ export class SqliteRepository implements Repository {
       throw new Error(`采购单已存在：${purchase.id}`);
     }
     this.assertBook(purchase.bookId);
-    if (this.supplierBookId(purchase.supplierId) !== purchase.bookId) throw new Error('采购单供应商必须与采购单同账本');
+    // 草稿态（supplierId='' / 开单自动生成）暂无供应商，跳过供应商校验；确认时再补并校验。
+    if (purchase.supplierId !== '' && this.supplierBookId(purchase.supplierId) !== purchase.bookId) {
+      throw new Error('采购单供应商必须与采购单同账本');
+    }
     const o = this.db.prepare('SELECT book_id FROM orders WHERE id = ? AND deleted = 0').get(purchase.orderId) as { book_id: string } | undefined;
     if (!o) throw new Error(`关联订单不存在：${purchase.orderId}`);
     if (o.book_id !== purchase.bookId) throw new Error('关联订单必须与采购单同账本');
@@ -782,6 +786,33 @@ export class SqliteRepository implements Repository {
       }
     }
     return rows.map((r) => toPurchase(r, (byPurchase.get(r.id) ?? []).map(toPurchaseLine)));
+  }
+
+  async updatePurchase(id: string, patch: PurchasePatch): Promise<StoredPurchase> {
+    const cur = await this.getPurchase(id);
+    if (!cur) throw new Error(`采购单不存在：${id}`);
+    const next = { ...cur, ...patch };
+    // 确认时补供应商：校验同账本（草稿原本 supplierId=''）
+    if (patch.supplierId !== undefined && patch.supplierId !== '' && this.supplierBookId(patch.supplierId) !== cur.bookId) {
+      throw new Error('采购单供应商必须与采购单同账本');
+    }
+    const ts = this.now();
+    this.tx(() => {
+      this.db
+        .prepare(`UPDATE purchases SET supplier_id=?, date=?, pay_mode=?, note=?, txn_id=?, updated_at=? WHERE id=?`)
+        .run(next.supplierId, next.date, next.payMode, next.note, next.txnId, ts, id);
+      if (patch.lines !== undefined) {
+        this.db.prepare('DELETE FROM purchase_lines WHERE purchase_id = ?').run(id);
+        this.insertPurchaseLines(id, patch.lines);
+      }
+    });
+    return (await this.getPurchase(id))!;
+  }
+
+  async removePurchase(id: string): Promise<void> {
+    const cur = this.db.prepare('SELECT 1 FROM purchases WHERE id = ? AND deleted = 0').get(id);
+    if (!cur) throw new Error(`采购单不存在：${id}`);
+    this.db.prepare('UPDATE purchases SET deleted = 1, updated_at = ? WHERE id = ?').run(this.now(), id);
   }
 
   // ---- 生意：库存出入库 ----

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { agingBuckets, convertAmount, fromMinor, orderTotal, purchaseTotal, toMinor } from '@app/core';
-import type { OrderLine, OrderPaymentStatus, OrderStatus } from '@app/core';
+import type { OrderPaymentStatus, OrderStatus } from '@app/core';
 import type { StoredCustomer, StoredInventoryMovement, StoredOrder, StoredProduct, StoredPurchase, StoredSettlement, StoredSupplier } from '@app/store';
 import type { AppData } from '../App';
 import { genId } from '../db';
 import { currencyDef, currencyList, fmtMoney, todayISO } from '../format';
-import { completeOrder, customerOrderStatus, receivableSummary, recordCollection, recordOrderPurchase } from '../biz';
+import { completeOrder, confirmOrderPurchase, customerOrderStatus, orderShortfalls, receivableSummary, recordCollection, saveOrder, voidDraftPurchase } from '../biz';
 
 const STATUS: Record<OrderStatus, { label: string; cls: string }> = {
   pending_purchase: { label: '待采购', cls: '' },
@@ -112,10 +112,13 @@ export default function Orders({ data }: { data: AppData }) {
     }
     return m;
   }, [movements]);
-  // 每单代采成本（人民币）= 该单各采购单总额之和（成本直挂订单，不过库存）。
+  // 每单代采成本（人民币）= 该单各「已确认」采购单总额之和（草稿单 txnId=null、未记账、不计成本）。
   const dropshipCostByOrder = useMemo(() => {
     const m = new Map<string, number>();
-    for (const p of purchases) m.set(p.orderId, (m.get(p.orderId) ?? 0) + purchaseTotal(p.lines));
+    for (const p of purchases) {
+      if (!p.txnId) continue;
+      m.set(p.orderId, (m.get(p.orderId) ?? 0) + purchaseTotal(p.lines));
+    }
     return m;
   }, [purchases]);
   // 毛利按人民币本位：订单收入折人民币 − 总成本（库存 + 代采，恒 CNY）。
@@ -147,7 +150,7 @@ export default function Orders({ data }: { data: AppData }) {
       prodCost.set(mv.productId, (prodCost.get(mv.productId) ?? 0) + Math.round(-mv.qty * mv.unitCost));
     }
     for (const p of purchases) {
-      if (!completedIds.has(p.orderId)) continue; // 代采品成本：已完成订单的采购单行按商品
+      if (!p.txnId || !completedIds.has(p.orderId)) continue; // 已确认采购 + 已完成订单：采购行成本按商品
       for (const l of p.lines) {
         if (!l.productId) continue;
         prodCost.set(l.productId, (prodCost.get(l.productId) ?? 0) + Math.round(l.qty * l.unitCost));
@@ -191,32 +194,24 @@ export default function Orders({ data }: { data: AppData }) {
       setErr('请至少填写一行有效的商品（名称 + 数量 + 单价）');
       return;
     }
-    const orderId = genId();
-    const orderLines: OrderLine[] = valid.map((l) => ({
-      id: genId(),
-      orderId,
-      name: l.name.trim(),
-      qty: Number(l.qty),
-      unitPrice: toMinor(Number(l.price), oDecimals),
-      productId: l.productId || null,
-    }));
-    // 含代采品 → 初始「待采购」（须先为此单采购才能发货/完成）；否则直接「待发货」。
-    const hasDropship = orderLines.some((l) => l.productId && products.find((p) => p.id === l.productId)?.dropship);
+    // 统一库存模型：biz.saveOrder 按当前库存算缺口——不足则订单转「待采购」并自动生成草稿采购单。
     try {
-      await repo.addOrder({
-        id: orderId,
-        bookId: book.id,
+      await saveOrder(repo, book, {
         customerId: effCust,
         date,
         currency: oCur,
-        status: hasDropship ? 'pending_purchase' : 'pending_ship',
         note: note.trim(),
-        revenueTxnId: null,
-        lines: orderLines,
+        lines: valid.map((l) => ({
+          productId: l.productId || null,
+          name: l.name.trim(),
+          qty: Number(l.qty),
+          unitPrice: toMinor(Number(l.price), oDecimals),
+        })),
       });
       setLines([emptyLine()]);
       setNote('');
       await refresh();
+      await reload();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
@@ -239,11 +234,16 @@ export default function Orders({ data }: { data: AppData }) {
   }
 
   async function doCancel(order: StoredOrder): Promise<void> {
-    if (purchases.some((p) => p.orderId === order.id)) {
-      setErr('本单已为此单采购，不能直接取消（采购已产生账务，需手动反向处理）');
+    setErr(null);
+    // 已确认采购（txnId 非空）已产生账务，禁直接取消；草稿采购单（自动生成、未记账）可随订单一并作废。
+    if (purchases.some((p) => p.orderId === order.id && p.txnId)) {
+      setErr('本单已确认采购，不能直接取消（采购已产生账务，需手动反向处理）');
       return;
     }
     if (!confirm(`取消订单（${custName(order.customerId)} · ${fmtMoney(orderTotal(order.lines), order.currency)}）？未采购订单无账务影响。`)) return;
+    for (const d of purchases.filter((p) => p.orderId === order.id && !p.txnId)) {
+      await repo.removePurchase(d.id);
+    }
     await repo.updateOrder(order.id, { status: 'cancelled' });
     await refresh();
   }
@@ -259,23 +259,28 @@ export default function Orders({ data }: { data: AppData }) {
     setErr(null);
   }
 
+  /** 找某订单的草稿采购单（开单不足时自动生成，txnId=null）。 */
+  const draftOf = (orderId: string): StoredPurchase | undefined => purchases.find((p) => p.orderId === orderId && !p.txnId);
+
   function openPurchase(order: StoredOrder): void {
     setErr(null);
+    const draft = draftOf(order.id);
+    if (!draft) {
+      setErr('未找到该订单的待采购单');
+      return;
+    }
     setPurchaseFor(order.id);
     setPSup(suppliers[0]?.id ?? '');
     setPMode('credit');
     setPAcct('');
     setPDate(todayISO());
-    // 预填各代采行采购价 = 商品进价（人民币）
+    // 预填各行采购价 = 草稿行单价（开单时已带商品进价，人民币）
     const costs: Record<string, string> = {};
-    for (const l of order.lines) {
-      const prod = l.productId ? products.find((p) => p.id === l.productId) : undefined;
-      if (prod?.dropship) costs[l.id] = String(fromMinor(prod.costPrice));
-    }
+    for (const l of draft.lines) costs[l.id] = String(fromMinor(l.unitCost));
     setPCosts(costs);
   }
 
-  async function submitPurchase(order: StoredOrder, dsLines: OrderLine[], payAcctId: string): Promise<void> {
+  async function submitPurchase(draft: StoredPurchase, payAcctId: string): Promise<void> {
     setErr(null);
     const sup = suppliers.find((s) => s.id === (pSup || suppliers[0]?.id));
     if (!sup) {
@@ -286,24 +291,40 @@ export default function Orders({ data }: { data: AppData }) {
       setErr('现结采购需选人民币付款账户');
       return;
     }
-    const lines = dsLines.map((l) => ({ productId: l.productId, name: l.name, qty: l.qty, unitCost: toMinor(Number(pCosts[l.id] ?? 0)) }));
-    if (lines.some((l) => !Number.isFinite(l.unitCost) || l.unitCost < 0)) {
-      setErr('请为每个代采品填写有效采购价');
-      return;
+    const costs: Record<string, number> = {};
+    for (const l of draft.lines) {
+      const v = Number(pCosts[l.id] ?? '');
+      if (!Number.isFinite(v) || v < 0) {
+        setErr('请为每个采购品填写有效采购价');
+        return;
+      }
+      costs[l.id] = toMinor(v);
     }
     try {
-      await recordOrderPurchase(repo, book, {
-        order,
+      await confirmOrderPurchase(repo, book, {
+        purchase: draft,
         supplier: sup,
-        lines,
         date: pDate,
         payMode: pMode,
         payAccountId: pMode === 'cash' ? payAcctId : undefined,
+        costs,
         note: '',
       });
       setPurchaseFor(null);
       await refresh();
       await reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /** 库存已够：作废草稿采购单，订单转「待发货」（草稿无记账，安全）。 */
+  async function doVoidDraft(draft: StoredPurchase): Promise<void> {
+    setErr(null);
+    try {
+      await voidDraftPurchase(repo, book, draft);
+      setPurchaseFor(null);
+      await refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
@@ -563,12 +584,17 @@ export default function Orders({ data }: { data: AppData }) {
                 )}
               </div>
               {purchaseFor === o.id && (() => {
-                const dsLines = o.lines.filter((l) => l.productId && products.find((p) => p.id === l.productId)?.dropship);
+                const draft = draftOf(o.id);
+                if (!draft) return null;
                 const purAccts = cashAccounts.filter((a) => a.currency === 'CNY' && a.name !== '库存商品' && a.name !== '代采在途成本');
                 const effPurAcct = purAccts.some((a) => a.id === pAcct) ? pAcct : (purAccts[0]?.id ?? '');
+                const covered = orderShortfalls(o.lines, products, movements).length === 0; // 折中：库存已够则可作废
                 return (
                   <div className="collect">
-                    <p className="muted small" style={{ marginTop: 0 }}>为此单代采品采购，录入采购价。成本直挂订单，完成时结转。</p>
+                    <p className="muted small" style={{ marginTop: 0 }}>为此单不足的商品采购，录入采购价。成本直挂订单，完成时结转。</p>
+                    {covered && (
+                      <p className="muted small" style={{ marginTop: 0 }}>库存现已充足——可「作废」本采购单，订单直接转「待发货」从库存出货。</p>
+                    )}
                     <div className="qgrid">
                       <label>
                         供应商
@@ -609,7 +635,7 @@ export default function Orders({ data }: { data: AppData }) {
                       </label>
                     </div>
                     <div className="ds-lines">
-                      {dsLines.map((l) => (
+                      {draft.lines.map((l) => (
                         <label key={l.id} className="ds-line">
                           <span>{l.name} ×{l.qty} · 采购价(¥)</span>
                           <input
@@ -625,7 +651,12 @@ export default function Orders({ data }: { data: AppData }) {
                       <button className="lnk" onClick={() => setPurchaseFor(null)}>
                         取消
                       </button>
-                      <button className="btn btn-primary" onClick={() => void submitPurchase(o, dsLines, effPurAcct)}>
+                      {covered && (
+                        <button className="lnk danger" onClick={() => void doVoidDraft(draft)}>
+                          库存已够·作废
+                        </button>
+                      )}
+                      <button className="btn btn-primary" onClick={() => void submitPurchase(draft, effPurAcct)}>
                         确认采购
                       </button>
                     </div>

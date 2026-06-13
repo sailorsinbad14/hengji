@@ -27,9 +27,9 @@
 
 **已拍板的决策**：
 - **应收对称做全**：客户可赊账、分期收款，收/付共用 Settlement 机制（方向+对手方+可选关联单据+金额+日期+方式[微信/支付宝/银行/现金/其他]+备注+附件）。
-- **订单五态**：待采购/待发货/已发货/已完成/已取消。**财务事件只发生在「已完成」**（确认收入+出库+成本结转一次性入账）与取消；其余状态纯跟踪。初始态按行内产品模式推导（含未采购代采行→待采购）。
+- **订单五态**：待采购/待发货/已发货/已完成/已取消。**财务事件只发生在「已完成」**（确认收入+出库+成本结转一次性入账）与取消；其余状态纯跟踪。初始态按库存充足度推导（任一商品在手不足→待采购，并自动生成草稿采购单）。
 - **库存成本=移动加权平均**：入库重算均价，出库按当前均价结转营业成本。
-- **供货双模式**（产品级字段）：库存品走"补库存采购"（入库不挂单）；代采品在订单内"为此单采购"（成本直挂订单不过库存）→ 每单/每客户/每产品毛利自动可得。
+- **统一库存模型（C2 模型重构，2026-06-12）**：商品不再二分「库存品/代采品」，**所有商品默认库存追踪**（统一在手数，默认 0）；`quoteOnly` 是反向标记（纯报价/服务行，不进库存/成本/采购）。开单不限库存，不足部分自动生成「待采购草稿单」，确认采购即采即出（成本经「代采在途」直挂订单、不过库存均价池）；完成时同一商品可**拆行**——已采购数走采购价、其余从库存按均价出（A3）。→ 每单/每客户/每产品毛利自动可得。**取代了原 isStock/dropship 双模式**（见下「C2 模型重构」）。
 - **应付/应收按对手方自动建子科目**（应付账款/<供应商>，复用 parentId 层级）；供应商档案带默认账期天数，采购单自动算到期日 → 账龄与到期提醒。
 - **按账本类型定制默认科目表**；现有 business 标签被生意账本取代。
 - **附件**：桌面版复制进应用数据目录、DB 存引用（需 tauri-plugin-dialog/fs）；浏览器版不持久；云同步中文件最后做。
@@ -49,8 +49,17 @@
 - **C1 商品目录**：Product 主数据（名/进价/售价/是否库存品/单位）；订单行可选商品自动带价（订单行加 `productId`）。非库存品＝报价目录，纯省录入。不含库存/COGS。
 - **C2 库存（仅库存品）✅ 已落地（2026-06-12）**：数量从出入库流水聚合（不存死值）；入仓＝进货/补货（+，按进价）；出货＝订单完成自动（−，按移动加权均价结转营业成本）→ 每单毛利。**实现**：core `InventoryMovement` + `inventory.ts`(inventoryState/currentAvgCost/issueCost 移动加权均价回放)；store M9 `inventory_movements` 表 + repo CRUD；biz `recordStockIn`(借库存商品/贷 CNY 资产 + in 流水)、`completeOrder` 加 COGS 结转(借营业成本/贷库存商品 + out 流水，先校验在手充足、不足整单不落)；web「库存」tab(在手/均价/库存值 + 进货)、Orders 每单毛利(订单收入折人民币 − 成本)。**库存人民币本位**。
 - **C2c 供应商 + 应付账款 ✅ 已落地（2026-06-12）**：镜像 AR。core `Supplier` + `creditPurchaseEntry`(借库存/贷应付)/`supplierPaymentEntry`(借应付/贷资产)，负债余额为负=欠款。store M10 `suppliers` 表 + CRUD + settlement out/supplier 校验（Settlement 早含 out/supplier，还款无新迁移）。biz 应付按「供应商×币种」子科目(CNY 本位)、payableSummary、recordCreditStockIn/recordSupplierPayment。web「供应商」tab(档案 + 应付概览 + 内联还款)、库存进货加现结/赊账、AP 自动管理。**简化**：AP 恒 CNY；赊购落库存非费用、COGS 仍销售时确认（与记账口径只作用 AR 不相交）；还款按供应商不按单分摊。
-- **C2d 代采 dropship ✅ 已落地（2026-06-12）**：完整版（Purchase 实体）。Product 加 `dropship`(与 isStock 互斥)；`Purchase(+PurchaseLine)`(store M11 `purchases`/`purchase_lines` 表 + CRUD)。代采品订单初始「待采购」→「为此单采购」(供应商/现结or赊账→AP/逐行采购价，成本计入「代采在途成本」holding 资产、状态转「待发货」)→ 完成结转 COGS(借营业成本/贷代采在途，holding 净归零)→ 每单毛利=订单收入折CNY − 代采成本。**不过库存均价池**。**简化**：代采恒 CNY；一单一次采购(无部分/重采)；每产品毛利汇总后置；已采购单取消需手动反向。
+- **C2d 代采 dropship ✅ 已落地（2026-06-12）**：完整版（Purchase 实体）。Product 加 `dropship`(与 isStock 互斥)；`Purchase(+PurchaseLine)`(store M11 `purchases`/`purchase_lines` 表 + CRUD)。代采品订单初始「待采购」→「为此单采购」(供应商/现结or赊账→AP/逐行采购价，成本计入「代采在途成本」holding 资产、状态转「待发货」)→ 完成结转 COGS(借营业成本/贷代采在途，holding 净归零)→ 每单毛利=订单收入折CNY − 代采成本。**不过库存均价池**。**⚠️ C2c/C2d 的「库存品/代采品二分」已被下方 C2 模型重构取代**（机制基座 Purchase/代采在途/COGS 结转/AP 沿用）。
 - **B 收尾**：应收账龄 + 到期提醒（用 customer.dueDays + 订单日期）✅ 已落地（见上方 B 期段）。
+
+### C2 模型重构（2026-06-12 决策面板拍板，分 4 步；Step 1 ✅ 已落地）
+取消「库存品/代采品」二分，统一为「**默认库存追踪 + 不足自动采购**」。决策详见 `~/.claude/plans/hengji-followups.md`「⭐ C2 模型重构」节（11 项 + 4 步方案）。
+- **Step 1 · 商品模型统一 + 不足自动采购 ✅ 已落地**：
+  - core：`Product` 删 `isStock`/`dropship`，加 `quoteOnly`（纯报价/服务行）；纯函数 `planInventoryIssue`（拆「采购覆盖 vs 库存出库」COGS，采购覆盖数 = `purchased`、库存出库 = `demand−purchased`，仍不够则 shortfall 拦截整单）。
+  - store：M12 `products.quote_only`（旧 is_stock/dropship 留死列、不读不 DROP）；采购单**草稿态**复用既有 nullable `txn_id`（=草稿）+ 空 `supplier_id`，新增 `updatePurchase`（确认补供应商/采购价/记账 id）+ `removePurchase`（作废草稿）。
+  - biz/web：开单 `saveOrder` 按当前库存算缺口——不足则订单「待采购」+ 自动生成草稿采购单（行=各缺口商品×缺口数，单价预填进价）；`confirmOrderPurchase` 补供应商+采购价记账→「待发货」；`voidDraftPurchase`（库存已够时作废草稿，折中 A2）；`completeOrder` 重写用 `planInventoryIssue` 拆行结转 COGS（库存 out 走均价 + 采购走代采在途）。Products 加「纯报价」勾选 + 「期初库存」(落 in 流水、对方科目期初余额，A4)。
+  - **简化/边界**：一单一张草稿采购单（多缺口商品同一供应商）；确认后的采购单作废需手动反向（仅草稿可一键作废）；代采在途 holding 单账户共用（各单净额）。
+- **Step 2 盘点调整 / Step 3 采购页（orderId 可空+去向 kind，M13）/ Step 4 额外费用+公式引擎**：待后续 session（见 followups）。
 
 ## 多币种（个人追踪派，2026-06 评审通过；✅ Phase 1 已落地）
 

@@ -34,7 +34,7 @@ export default function Inventory({ data }: { data: AppData }) {
     void refresh();
   }, [book.id]);
 
-  const stockProducts = products.filter((p) => p.isStock);
+  const stockProducts = products.filter((p) => !p.quoteOnly); // 统一库存模型：纯报价/服务不进库存
   // 库存为人民币本位：付款账户限 CNY 资产，排除应收/库存商品自管科目
   const payAccounts = accounts.filter(
     (a) => a.type === 'asset' && a.currency === 'CNY' && !a.name.startsWith('应收账款') && a.name !== '库存商品',
@@ -60,7 +60,7 @@ export default function Inventory({ data }: { data: AppData }) {
   async function add(): Promise<void> {
     setErr(null);
     if (!effProd) {
-      setErr('还没有库存品——去「商品」页把商品勾选为「库存品」');
+      setErr('还没有库存商品——去「商品」页添加（默认即库存追踪；纯报价/服务不进库存）');
       return;
     }
     const q = Number(qty);
@@ -109,7 +109,7 @@ export default function Inventory({ data }: { data: AppData }) {
 
       <div className="card">
         {rows.length === 0 ? (
-          <p className="muted">还没有库存品。去「商品」页把商品勾选为「库存品」，再来这里进货、查看在手与成本。</p>
+          <p className="muted">还没有库存商品。去「商品」页添加商品（默认即库存追踪），再来这里进货、查看在手与成本。</p>
         ) : (
           rows.map(({ p, st }) => (
             <div className="brow" key={p.id}>
@@ -131,7 +131,7 @@ export default function Inventory({ data }: { data: AppData }) {
       <div className="card">
         <h3>进货 / 补库存</h3>
         {stockProducts.length === 0 ? (
-          <p className="muted">先到「商品」页添加库存品。</p>
+          <p className="muted">先到「商品」页添加商品（默认即库存追踪）。</p>
         ) : (
           <>
             <p className="muted small">

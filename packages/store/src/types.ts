@@ -1,4 +1,4 @@
-import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Product, Purchase, Reconciliation, Settlement, Supplier, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, InventoryMovement, Order, OrderStatus, Product, Purchase, PurchaseLine, Reconciliation, Settlement, Supplier, Transaction } from '@app/core';
 
 /** 每条记录都带的同步元数据，为将来的云同步预留。 */
 export interface SyncMeta {
@@ -76,10 +76,19 @@ export interface ProductPatch {
   name?: string;
   costPrice?: number;
   salePrice?: number;
-  isStock?: boolean;
-  dropship?: boolean;
+  quoteOnly?: boolean;
   unit?: string;
   archived?: boolean;
+}
+
+/** 采购单可改字段：草稿确认时补供应商/付款方式/采购价/记账 id，或更新备注。lines 给定即整单替换。 */
+export interface PurchasePatch {
+  supplierId?: string;
+  date?: string;
+  payMode?: 'cash' | 'credit';
+  note?: string;
+  txnId?: string | null;
+  lines?: PurchaseLine[];
 }
 
 export interface TxnQuery {
@@ -153,11 +162,14 @@ export interface Repository {
   listProducts(opts?: { bookId?: string; includeArchived?: boolean }): Promise<StoredProduct[]>;
   updateProduct(id: string, patch: ProductPatch): Promise<StoredProduct>;
 
-  // 代采采购单（v0.2 C2d 期）：代采品「为此单采购」，一张采购单对应一张订单。采购单创建后不改。
-  // 约束：采购单的供应商、关联订单必须与采购单同账本。
+  // 采购单（C2 模型重构）：「为此单采购」，一张采购单对应一张订单。开单不足时生成草稿态
+  // （supplierId=''、txnId=null），确认时用 updatePurchase 补供应商/采购价/记账 id，作废用 removePurchase。
+  // 约束：已确认采购单（supplierId 非空）的供应商、关联订单必须与采购单同账本。
   addPurchase(purchase: Purchase): Promise<StoredPurchase>;
   getPurchase(id: string): Promise<StoredPurchase | null>;
   listPurchases(query?: { bookId?: string; orderId?: string; supplierId?: string }): Promise<StoredPurchase[]>;
+  updatePurchase(id: string, patch: PurchasePatch): Promise<StoredPurchase>;
+  removePurchase(id: string): Promise<void>;
 
   // 库存出入库流水（v0.2 C2 期）：只追加、不改（盘点纠错另记一笔 adjust）。
   // 在手数量/移动加权均价由 core inventoryState 回放流水聚合，不存死值。约束：商品须与流水同账本。

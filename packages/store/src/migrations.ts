@@ -16,6 +16,9 @@
  * - m10：供应商档案 suppliers（C2 应付）；镜像 customers，纯新增表，不动既有数据。
  * - m11：代采 dropship（C2d）；products.dropship 列 + purchases/purchase_lines 表（代采为此单采购）。
  *   既有商品 dropship 默认 0；纯新增列/表，不动既有数据。
+ * - m12：C2 模型重构——统一库存模型。products.quote_only 列（纯报价/服务行标记）。
+ *   旧 is_stock/dropship 列保留为死列（不 DROP，避免迁移风险），代码改读 quote_only。
+ *   采购单草稿态复用既有 nullable txn_id（=草稿）+ 空 supplier_id，无需新列。
  */
 
 export interface SqlRunner {
@@ -289,7 +292,11 @@ const M11: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_purchase_lines_purchase ON purchase_lines(purchase_id)`,
 ];
 
-export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11];
+// m12：C2 模型重构。统一库存模型——所有商品默认库存追踪，quote_only 标记纯报价/服务行。
+// 旧 is_stock/dropship 保留为死列（不读不 DROP）。既有商品 quote_only 默认 0（=库存追踪）。
+const M12: string[] = [`ALTER TABLE products ADD COLUMN quote_only INTEGER NOT NULL DEFAULT 0`];
+
+export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12];
 
 export async function migrate(r: SqlRunner): Promise<void> {
   const v = await r.getVersion();

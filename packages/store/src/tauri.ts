@@ -9,6 +9,7 @@ import type {
   CustomerPatch,
   OrderPatch,
   ProductPatch,
+  PurchasePatch,
   Repository,
   StoredAccount,
   StoredBook,
@@ -665,10 +666,11 @@ export class TauriSqlRepository implements Repository {
     }
     await this.assertBook(product.bookId);
     const ts = this.now();
+    // is_stock/dropship 为死列（C2 模型重构后不读），靠 DEFAULT 0 兜底，INSERT 不再写入。
     await this.db.execute(
-      `INSERT INTO products (id, book_id, name, cost_price, sale_price, is_stock, dropship, unit, archived, created_at, updated_at, deleted)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0)`,
-      [product.id, product.bookId, product.name, product.costPrice, product.salePrice, product.isStock ? 1 : 0, product.dropship ? 1 : 0, product.unit, product.archived ? 1 : 0, ts, ts],
+      `INSERT INTO products (id, book_id, name, cost_price, sale_price, quote_only, unit, archived, created_at, updated_at, deleted)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0)`,
+      [product.id, product.bookId, product.name, product.costPrice, product.salePrice, product.quoteOnly ? 1 : 0, product.unit, product.archived ? 1 : 0, ts, ts],
     );
     return (await this.getProduct(product.id))!;
   }
@@ -695,8 +697,8 @@ export class TauriSqlRepository implements Repository {
     if (!cur) throw new Error(`商品不存在：${id}`);
     const next: StoredProduct = { ...cur, ...patch, updatedAt: this.now() };
     await this.db.execute(
-      'UPDATE products SET name=$1, cost_price=$2, sale_price=$3, is_stock=$4, dropship=$5, unit=$6, archived=$7, updated_at=$8 WHERE id=$9',
-      [next.name, next.costPrice, next.salePrice, next.isStock ? 1 : 0, next.dropship ? 1 : 0, next.unit, next.archived ? 1 : 0, next.updatedAt, id],
+      'UPDATE products SET name=$1, cost_price=$2, sale_price=$3, quote_only=$4, unit=$5, archived=$6, updated_at=$7 WHERE id=$8',
+      [next.name, next.costPrice, next.salePrice, next.quoteOnly ? 1 : 0, next.unit, next.archived ? 1 : 0, next.updatedAt, id],
     );
     return (await this.getProduct(id))!;
   }
@@ -716,7 +718,10 @@ export class TauriSqlRepository implements Repository {
       throw new Error(`采购单已存在：${purchase.id}`);
     }
     await this.assertBook(purchase.bookId);
-    if ((await this.supplierBookId(purchase.supplierId)) !== purchase.bookId) throw new Error('采购单供应商必须与采购单同账本');
+    // 草稿态（supplierId='' / 开单自动生成）暂无供应商，跳过供应商校验；确认时再补并校验。
+    if (purchase.supplierId !== '' && (await this.supplierBookId(purchase.supplierId)) !== purchase.bookId) {
+      throw new Error('采购单供应商必须与采购单同账本');
+    }
     const orows = await this.db.select<Array<{ book_id: string }>>('SELECT book_id FROM orders WHERE id = $1 AND deleted = 0', [purchase.orderId]);
     if (!orows[0]) throw new Error(`关联订单不存在：${purchase.orderId}`);
     if (orows[0].book_id !== purchase.bookId) throw new Error('关联订单必须与采购单同账本');
@@ -772,6 +777,33 @@ export class TauriSqlRepository implements Repository {
       }
     }
     return rows.map((r) => toPurchase(r, (byPurchase.get(r.id) ?? []).map(toPurchaseLine)));
+  }
+
+  async updatePurchase(id: string, patch: PurchasePatch): Promise<StoredPurchase> {
+    const cur = await this.getPurchase(id);
+    if (!cur) throw new Error(`采购单不存在：${id}`);
+    const next = { ...cur, ...patch };
+    // 确认时补供应商：校验同账本（草稿原本 supplierId=''）
+    if (patch.supplierId !== undefined && patch.supplierId !== '' && (await this.supplierBookId(patch.supplierId)) !== cur.bookId) {
+      throw new Error('采购单供应商必须与采购单同账本');
+    }
+    const ts = this.now();
+    await this.db.execute(
+      'UPDATE purchases SET supplier_id=$1, date=$2, pay_mode=$3, note=$4, txn_id=$5, updated_at=$6 WHERE id=$7',
+      [next.supplierId, next.date, next.payMode, next.note, next.txnId, ts, id],
+    );
+    if (patch.lines !== undefined) {
+      await this.db.execute('DELETE FROM purchase_lines WHERE purchase_id = $1', [id]);
+      await this.insertPurchaseLines(id, patch.lines);
+    }
+    return (await this.getPurchase(id))!;
+  }
+
+  async removePurchase(id: string): Promise<void> {
+    if (!(await this.exists('SELECT 1 FROM purchases WHERE id = $1 AND deleted = 0', [id]))) {
+      throw new Error(`采购单不存在：${id}`);
+    }
+    await this.db.execute('UPDATE purchases SET deleted = 1, updated_at = $1 WHERE id = $2', [this.now(), id]);
   }
 
   // ---- 生意：库存出入库 ----

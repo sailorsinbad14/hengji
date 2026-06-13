@@ -1,6 +1,6 @@
-import { accountBalance, allocateCustomerPayments, collectionEntry, convertAmount, creditPurchaseEntry, expandEntry, inventoryState, orderRevenueEntry, orderTotal, purchaseTotal, supplierPaymentEntry } from '@app/core';
-import type { AccountType, ConvertCtx, Customer, CustomerPayment, Order, OrderPaymentStatus, PurchaseLine, Supplier } from '@app/core';
-import type { Repository, StoredAccount, StoredBook, StoredCustomer, StoredOrder, StoredSettlement, StoredTransaction } from '@app/store';
+import { accountBalance, allocateCustomerPayments, collectionEntry, convertAmount, creditPurchaseEntry, expandEntry, inventoryState, orderRevenueEntry, orderTotal, planInventoryIssue, purchaseTotal, supplierPaymentEntry } from '@app/core';
+import type { AccountType, ConvertCtx, Customer, CustomerPayment, IssuePlanLine, Order, OrderLine, OrderPaymentStatus, OrderStatus, PurchaseLine, Supplier } from '@app/core';
+import type { Repository, StoredAccount, StoredBook, StoredCustomer, StoredInventoryMovement, StoredOrder, StoredProduct, StoredPurchase, StoredSettlement, StoredTransaction } from '@app/store';
 import { genId } from './db';
 import { daysBetween } from './format';
 
@@ -195,10 +195,79 @@ export async function renameCustomer(repo: Repository, book: StoredBook, oldName
   }
 }
 
+/** 某商品某单的库存缺口（开单/完成时按当时库存校验）。 */
+export interface ProductShortfall {
+  productId: string;
+  name: string;
+  /** 本单需求数量 */
+  demand: number;
+  /** 当前在手 */
+  onHand: number;
+  /** 缺口 = max(0, demand − onHand) */
+  missing: number;
+  /** 商品进价（草稿采购单预填用） */
+  costPrice: number;
+}
+
+/**
+ * 算某组订单行的库存缺口（统一库存模型）：非 quoteOnly、带 productId 的行按商品聚合需求，
+ * 与当前在手比，缺口 = max(0, 需求 − 在手)。无缺口商品不返回。开单生成草稿采购单 / 完成前校验共用。
+ */
+export function orderShortfalls(
+  lines: ReadonlyArray<{ productId: string | null; qty: number }>,
+  products: StoredProduct[],
+  movements: StoredInventoryMovement[],
+): ProductShortfall[] {
+  const prodById = new Map(products.map((p) => [p.id, p]));
+  const demandBy = new Map<string, number>();
+  for (const l of lines) {
+    const prod = l.productId ? prodById.get(l.productId) : undefined;
+    if (prod && !prod.quoteOnly) demandBy.set(prod.id, (demandBy.get(prod.id) ?? 0) + l.qty);
+  }
+  const out: ProductShortfall[] = [];
+  for (const [pid, demand] of demandBy) {
+    const prod = prodById.get(pid)!;
+    const st = inventoryState(movements.filter((m) => m.productId === pid));
+    const missing = Math.max(0, demand - st.qty);
+    if (missing > 0) out.push({ productId: pid, name: prod.name, demand, onHand: st.qty, missing, costPrice: prod.costPrice });
+  }
+  return out;
+}
+
+/**
+ * 开单（统一库存模型）：建订单；非 quoteOnly 商品行按当前库存算缺口——
+ * 任一缺口>0 → 订单「待采购」并生成草稿采购单（行=各缺口商品×缺口数量，单价预填进价）；
+ * 全部在手充足（或仅 quoteOnly/自由文本行）→ 直接「待发货」。草稿单 supplierId=''、txnId=null，确认时补全。
+ */
+export async function saveOrder(
+  repo: Repository,
+  book: StoredBook,
+  opts: {
+    customerId: string;
+    date: string;
+    currency: string;
+    note: string;
+    lines: Array<{ productId: string | null; name: string; qty: number; unitPrice: number }>;
+  },
+): Promise<void> {
+  const orderId = genId();
+  const lines: OrderLine[] = opts.lines.map((l) => ({ id: genId(), orderId, name: l.name, qty: l.qty, unitPrice: l.unitPrice, productId: l.productId }));
+  const products = await repo.listProducts({ bookId: book.id });
+  const movements = await repo.listInventoryMovements({ bookId: book.id });
+  const shortfalls = orderShortfalls(lines, products, movements);
+  const status: OrderStatus = shortfalls.length > 0 ? 'pending_purchase' : 'pending_ship';
+  await repo.addOrder({ id: orderId, bookId: book.id, customerId: opts.customerId, date: opts.date, currency: opts.currency, status, note: opts.note, revenueTxnId: null, lines });
+  if (shortfalls.length > 0) {
+    const purchaseId = genId();
+    const draftLines: PurchaseLine[] = shortfalls.map((s) => ({ id: genId(), purchaseId, productId: s.productId, name: s.name, qty: s.missing, unitCost: s.costPrice }));
+    await repo.addPurchase({ id: purchaseId, bookId: book.id, supplierId: '', orderId, date: opts.date, payMode: 'credit', note: '', txnId: null, lines: draftLines });
+  }
+}
+
 /**
  * 完成订单：① 确认收入（赊销）借应收/客户(订单币种)、贷营业收入；
- * ② 库存品按出库时点移动加权均价结转营业成本（借营业成本/贷库存商品，人民币本位）+ 记 out 流水。
- * 先校验库存充足（不足则整单不落），再写收入与成本。
+ * ② 各商品需求拆「已采购覆盖」(代采在途结转 COGS) + 「从库存出库」(移动加权均价结转 COGS) 两部分；
+ * 库存出库部分按 `planInventoryIssue` 拆行——采购+库存仍不够则整单不落（校验在任何写入之前）。
  */
 export async function completeOrder(repo: Repository, book: StoredBook, order: Order, customer: Customer): Promise<void> {
   const total = orderTotal(order.lines);
@@ -207,36 +276,34 @@ export async function completeOrder(repo: Repository, book: StoredBook, order: O
   const revenue = accounts.find((a) => a.type === 'income' && a.name === REVENUE);
   if (!revenue) throw new Error('未找到「营业收入」科目，请先在账户页添加');
 
-  // 库存品出库：按商品聚合本单数量（同商品多行合并），校验在手充足，算出库时点均价与 COGS。
+  // 商品需求（非 quoteOnly、带 productId 的行按商品聚合）
   const products = await repo.listProducts({ bookId: book.id, includeArchived: true });
   const prodById = new Map(products.map((p) => [p.id, p]));
-  const qtyByProduct = new Map<string, number>();
+  const demandBy = new Map<string, number>();
   for (const line of order.lines) {
     const prod = line.productId ? prodById.get(line.productId) : undefined;
-    if (prod?.isStock) qtyByProduct.set(line.productId!, (qtyByProduct.get(line.productId!) ?? 0) + line.qty);
-  }
-  const issues: Array<{ productId: string; qty: number; avgCost: number; cogs: number }> = [];
-  let totalCogs = 0;
-  if (qtyByProduct.size > 0) {
-    const movements = await repo.listInventoryMovements({ bookId: book.id });
-    for (const [productId, qty] of qtyByProduct) {
-      const st = inventoryState(movements.filter((m) => m.productId === productId));
-      if (qty > st.qty) {
-        throw new Error(`库存不足：${prodById.get(productId)!.name} 在手 ${st.qty}，本单需 ${qty}`);
-      }
-      const cogs = Math.round(qty * st.avgCost);
-      issues.push({ productId, qty, avgCost: st.avgCost, cogs });
-      totalCogs += cogs;
-    }
+    if (prod && !prod.quoteOnly) demandBy.set(prod.id, (demandBy.get(prod.id) ?? 0) + line.qty);
   }
 
-  // 代采品：本单代采成本由「为此单采购」的采购单决定，完成时从代采在途结转 COGS（不过库存池）。
-  // 含代采品但还没采购 → 整单不落（同库存不足，校验在任何写入之前）。
-  const hasDropshipLine = order.lines.some((l) => l.productId != null && prodById.get(l.productId)?.dropship);
-  const purchases = await repo.listPurchases({ bookId: book.id, orderId: order.id });
-  const dropshipCost = purchases.reduce((s, p) => s + purchaseTotal(p.lines), 0);
-  if (hasDropshipLine && dropshipCost <= 0) {
-    throw new Error('本单含代采品，请先在订单上「为此单采购」再完成');
+  // 已确认采购（txnId 非空）覆盖的数量（按商品）+ 该单代采成本（完成时从代采在途结转 COGS）
+  const confirmed = (await repo.listPurchases({ bookId: book.id, orderId: order.id })).filter((p) => p.txnId != null);
+  const purchasedBy = new Map<string, number>();
+  let dropshipCost = 0;
+  for (const p of confirmed) {
+    dropshipCost += purchaseTotal(p.lines);
+    for (const l of p.lines) if (l.productId) purchasedBy.set(l.productId, (purchasedBy.get(l.productId) ?? 0) + l.qty);
+  }
+
+  // 拆分：库存出库 vs 采购覆盖（core 纯函数）。采购+库存仍不够则整单不落。
+  const movements = await repo.listInventoryMovements({ bookId: book.id });
+  const planLines: IssuePlanLine[] = [...demandBy].map(([pid, demand]) => {
+    const st = inventoryState(movements.filter((m) => m.productId === pid));
+    return { productId: pid, demand, onHand: st.qty, avgCost: st.avgCost, purchased: purchasedBy.get(pid) ?? 0 };
+  });
+  const plan = planInventoryIssue(planLines);
+  if (plan.shortfalls.length > 0) {
+    const names = plan.shortfalls.map((s) => `${prodById.get(s.productId)?.name ?? s.productId} 缺 ${s.missing}`).join('；');
+    throw new Error(`库存不足，且未为此单采购覆盖：${names}。请先「为此单采购」或到库存页补货`);
   }
 
   // ① 确认收入
@@ -247,16 +314,16 @@ export async function completeOrder(repo: Repository, book: StoredBook, order: O
   );
   await repo.addTransaction(entry);
 
-  // ② 结转营业成本（库存品）：借营业成本 / 贷库存商品（CNY 本位），并记 out 出库流水
-  if (totalCogs > 0) {
+  // ② 库存出库 COGS：借营业成本 / 贷库存商品（CNY 本位），并按拆行记 out 出库流水
+  if (plan.inventoryCogs > 0) {
     const invId = await ensureInventoryAccount(repo, book);
     const cogsId = await ensureCogsAccount(repo, book);
     const cogsEntry = expandEntry(
-      { kind: 'expense', bookId: book.id, date: order.date, amount: totalCogs, currency: 'CNY', accountId: invId, categoryId: cogsId, payee: customer.name, note: '成本结转' },
+      { kind: 'expense', bookId: book.id, date: order.date, amount: plan.inventoryCogs, currency: 'CNY', accountId: invId, categoryId: cogsId, payee: customer.name, note: '成本结转' },
       genId,
     );
     await repo.addTransaction(cogsEntry);
-    for (const iss of issues) {
+    for (const iss of plan.issues) {
       await repo.addInventoryMovement({
         id: genId(),
         bookId: book.id,
@@ -326,6 +393,7 @@ export async function recordCollection(
 const INVENTORY = '库存商品';
 const COGS = '营业成本';
 const DROPSHIP_WIP = '代采在途成本';
+const OPENING_EQUITY = '期初余额';
 
 /** 找/建某顶层科目（按名+类型，CNY 本位容器），返回 id；已归档则恢复。 */
 async function ensureNamedAccount(repo: Repository, book: StoredBook, name: string, type: AccountType): Promise<string> {
@@ -352,6 +420,48 @@ export function ensureCogsAccount(repo: Repository, book: StoredBook): Promise<s
 /** 找/建「代采在途成本」资产科目（CNY，代采采购计入、订单完成结转 COGS 的中转）。 */
 export function ensureDropshipAccount(repo: Repository, book: StoredBook): Promise<string> {
   return ensureNamedAccount(repo, book, DROPSHIP_WIP, 'asset');
+}
+
+/** 找/建「期初余额」权益科目（CNY，期初库存的对方科目）。 */
+export function ensureOpeningEquityAccount(repo: Repository, book: StoredBook): Promise<string> {
+  return ensureNamedAccount(repo, book, OPENING_EQUITY, 'equity');
+}
+
+/**
+ * 期初库存（建商品时可选）：把已有库存按期初单价计入「库存商品」，对方科目「期初余额」（权益），
+ * 并记一条 in 出入库流水。与进货的区别：不动现金/应付，是开账存量。单价为 0 时只记数量流水、不记账。
+ */
+export async function recordOpeningStock(
+  repo: Repository,
+  book: StoredBook,
+  opts: { productId: string; qty: number; unitCost: number; date: string },
+): Promise<void> {
+  if (opts.qty <= 0) throw new Error('期初库存数量必须为正数');
+  const amount = Math.round(opts.qty * opts.unitCost);
+  let txnId: string | null = null;
+  if (amount > 0) {
+    const invId = await ensureInventoryAccount(repo, book);
+    const openingId = await ensureOpeningEquityAccount(repo, book);
+    // 借库存商品(+) / 贷期初余额(−)：transfer 从 期初余额 到 库存商品
+    const entry = expandEntry(
+      { kind: 'transfer', bookId: book.id, date: opts.date, amount, currency: 'CNY', fromAccountId: openingId, toAccountId: invId, payee: '期初库存', note: '期初库存' },
+      genId,
+    );
+    await repo.addTransaction(entry);
+    txnId = entry.id;
+  }
+  await repo.addInventoryMovement({
+    id: genId(),
+    bookId: book.id,
+    productId: opts.productId,
+    date: opts.date,
+    kind: 'in',
+    qty: opts.qty,
+    unitCost: opts.unitCost,
+    orderId: null,
+    txnId,
+    note: '期初库存',
+  });
 }
 
 /**
@@ -561,28 +671,28 @@ export async function recordSupplierPayment(
   });
 }
 
-// —— C2d 代采（为某订单专门采购，成本直挂订单不过库存）——
+// —— 为某订单采购（即采即出，成本直挂订单不过库存均价池）——
 
 /**
- * 为某订单采购代采品：建采购单 + 记账（借代采在途成本 / 贷 付款账户[现结] 或 应付账款/供应商[赊账]）。
- * 成本计入「代采在途成本」holding 资产，订单完成时由 completeOrder 结转 COGS。CNY 本位。
- * 采购后把订单从「待采购」转「待发货」。
+ * 确认/补全订单的草稿采购单：补供应商 + 各行采购价 → 记账（借代采在途成本 / 贷 付款账户[现结]
+ * 或 应付账款/供应商[赊账]）→ 写回采购单（supplierId/payMode/txnId/lines）。成本计入「代采在途成本」holding，
+ * 订单完成时由 completeOrder 结转 COGS。CNY 本位。确认后把订单从「待采购」转「待发货」。
+ * @param costs 各采购行的采购价（最小单位/分），按行 id 映射；缺省沿用草稿预填进价。
  */
-export async function recordOrderPurchase(
+export async function confirmOrderPurchase(
   repo: Repository,
   book: StoredBook,
   opts: {
-    order: Order;
+    purchase: StoredPurchase;
     supplier: Supplier;
-    lines: Array<{ productId: string | null; name: string; qty: number; unitCost: number }>;
     date: string;
     payMode: 'cash' | 'credit';
     payAccountId?: string;
+    costs: Record<string, number>;
     note: string;
   },
 ): Promise<void> {
-  const purchaseId = genId();
-  const lines: PurchaseLine[] = opts.lines.map((l) => ({ id: genId(), purchaseId, productId: l.productId, name: l.name, qty: l.qty, unitCost: l.unitCost }));
+  const lines: PurchaseLine[] = opts.purchase.lines.map((l) => ({ ...l, unitCost: opts.costs[l.id] ?? l.unitCost }));
   const total = purchaseTotal(lines);
   if (total <= 0) throw new Error('采购金额为 0');
   const wipId = await ensureDropshipAccount(repo, book);
@@ -601,18 +711,21 @@ export async function recordOrderPurchase(
     );
   }
   await repo.addTransaction(txn);
-  await repo.addPurchase({
-    id: purchaseId,
-    bookId: book.id,
-    supplierId: opts.supplier.id,
-    orderId: opts.order.id,
-    date: opts.date,
-    payMode: opts.payMode,
-    note: opts.note,
-    txnId: txn.id,
-    lines,
-  });
-  if (opts.order.status === 'pending_purchase') {
-    await repo.updateOrder(opts.order.id, { status: 'pending_ship' });
+  await repo.updatePurchase(opts.purchase.id, { supplierId: opts.supplier.id, date: opts.date, payMode: opts.payMode, note: opts.note, txnId: txn.id, lines });
+  const order = await repo.getOrder(opts.purchase.orderId);
+  if (order && order.status === 'pending_purchase') {
+    await repo.updateOrder(order.id, { status: 'pending_ship' });
+  }
+}
+
+/**
+ * 作废草稿采购单（库存已够、无需采购时）：软删采购单（草稿无记账，安全）+ 订单转「待发货」。
+ * 仅对草稿（txnId=null）调用；已确认采购需手动反向，不走此路径。
+ */
+export async function voidDraftPurchase(repo: Repository, book: StoredBook, purchase: StoredPurchase): Promise<void> {
+  await repo.removePurchase(purchase.id);
+  const order = await repo.getOrder(purchase.orderId);
+  if (order && order.status === 'pending_purchase') {
+    await repo.updateOrder(order.id, { status: 'pending_ship' });
   }
 }

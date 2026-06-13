@@ -3,17 +3,19 @@ import { fromMinor, toMinor } from '@app/core';
 import type { StoredProduct } from '@app/store';
 import type { AppData } from '../App';
 import { genId } from '../db';
-import { fmtMoney } from '../format';
+import { recordOpeningStock } from '../biz';
+import { fmtMoney, todayISO } from '../format';
 
 export default function Products({ data }: { data: AppData }) {
-  const { repo, book } = data;
+  const { repo, book, reload } = data;
   const [list, setList] = useState<StoredProduct[]>([]);
   const [name, setName] = useState('');
   const [cost, setCost] = useState('');
   const [sale, setSale] = useState('');
   const [unit, setUnit] = useState('');
-  const [isStock, setIsStock] = useState(false);
-  const [dropship, setDropship] = useState(false);
+  const [quoteOnly, setQuoteOnly] = useState(false);
+  const [openQty, setOpenQty] = useState(''); // 期初库存数量（可选）
+  const [openCost, setOpenCost] = useState(''); // 期初单价（可选，留空用进价）
   const [err, setErr] = useState<string | null>(null);
 
   const [editId, setEditId] = useState<string | null>(null);
@@ -21,8 +23,7 @@ export default function Products({ data }: { data: AppData }) {
   const [eCost, setECost] = useState('');
   const [eSale, setESale] = useState('');
   const [eUnit, setEUnit] = useState('');
-  const [eStock, setEStock] = useState(false);
-  const [eDropship, setEDropship] = useState(false);
+  const [eQuoteOnly, setEQuoteOnly] = useState(false);
 
   async function refresh(): Promise<void> {
     setList(await repo.listProducts({ bookId: book.id, includeArchived: true }));
@@ -56,13 +57,38 @@ export default function Products({ data }: { data: AppData }) {
       setErr('进价/售价需为非负数');
       return;
     }
-    await repo.addProduct({ id: genId(), bookId: book.id, name: nm, costPrice: c, salePrice: s, isStock, dropship, unit: unit.trim(), archived: false });
+    // 期初库存（仅库存追踪商品；纯报价不进库存）
+    let openQtyNum = 0;
+    let openCostMinor = c;
+    if (!quoteOnly && openQty.trim() !== '') {
+      const q = Number(openQty);
+      if (!Number.isFinite(q) || q < 0) {
+        setErr('期初库存数量需为非负数');
+        return;
+      }
+      openQtyNum = q;
+      if (openCost.trim() !== '') {
+        const oc = parseMoney(openCost);
+        if (oc === null) {
+          setErr('期初单价需为非负数');
+          return;
+        }
+        openCostMinor = oc;
+      }
+    }
+    const id = genId();
+    await repo.addProduct({ id, bookId: book.id, name: nm, costPrice: c, salePrice: s, quoteOnly, unit: unit.trim(), archived: false });
+    if (openQtyNum > 0) {
+      await recordOpeningStock(repo, book, { productId: id, qty: openQtyNum, unitCost: openCostMinor, date: todayISO() });
+      await reload();
+    }
     setName('');
     setCost('');
     setSale('');
     setUnit('');
-    setIsStock(false);
-    setDropship(false);
+    setQuoteOnly(false);
+    setOpenQty('');
+    setOpenCost('');
     await refresh();
   }
 
@@ -72,8 +98,7 @@ export default function Products({ data }: { data: AppData }) {
     setECost(String(fromMinor(p.costPrice)));
     setESale(String(fromMinor(p.salePrice)));
     setEUnit(p.unit);
-    setEStock(p.isStock);
-    setEDropship(p.dropship);
+    setEQuoteOnly(p.quoteOnly);
     setErr(null);
   }
 
@@ -94,7 +119,7 @@ export default function Products({ data }: { data: AppData }) {
       setErr('进价/售价需为非负数');
       return;
     }
-    await repo.updateProduct(p.id, { name: nm, costPrice: c, salePrice: s, isStock: eStock, dropship: eDropship, unit: eUnit.trim() });
+    await repo.updateProduct(p.id, { name: nm, costPrice: c, salePrice: s, quoteOnly: eQuoteOnly, unit: eUnit.trim() });
     setEditId(null);
     await refresh();
   }
@@ -136,10 +161,7 @@ export default function Products({ data }: { data: AppData }) {
                   </label>
                 </div>
                 <label className="chkline">
-                  <input type="checkbox" checked={eStock} onChange={(e) => { setEStock(e.target.checked); if (e.target.checked) setEDropship(false); }} /> 库存品（先囤货、移动加权均价）
-                </label>
-                <label className="chkline">
-                  <input type="checkbox" checked={eDropship} onChange={(e) => { setEDropship(e.target.checked); if (e.target.checked) setEStock(false); }} /> 代采品（接单后为此单采购、成本直挂订单）
+                  <input type="checkbox" checked={eQuoteOnly} onChange={(e) => setEQuoteOnly(e.target.checked)} /> 纯报价 / 服务（不做库存追踪、不进成本，如设计费/打样费）
                 </label>
                 {err && <p className="form-err" style={{ marginTop: 8 }}>{err}</p>}
                 <div className="arow-btns" style={{ marginTop: 8 }}>
@@ -156,8 +178,7 @@ export default function Products({ data }: { data: AppData }) {
                 <span className={`bname${p.archived ? ' muted' : ''}`}>
                   {p.name}
                   {p.unit && <span className="muted"> / {p.unit}</span>}
-                  {p.isStock && <span className="chip"> 库存品</span>}
-                  {p.dropship && <span className="chip"> 代采品</span>}
+                  {p.quoteOnly && <span className="chip"> 纯报价</span>}
                   {p.archived && <span className="chip"> 已归档</span>}
                 </span>
                 <span className="bnum">
@@ -198,11 +219,20 @@ export default function Products({ data }: { data: AppData }) {
           </label>
         </div>
         <label className="chkline">
-          <input type="checkbox" checked={isStock} onChange={(e) => { setIsStock(e.target.checked); if (e.target.checked) setDropship(false); }} /> 库存品（先囤货、移动加权均价）
+          <input type="checkbox" checked={quoteOnly} onChange={(e) => setQuoteOnly(e.target.checked)} /> 纯报价 / 服务（不做库存追踪、不进成本，如设计费/打样费）
         </label>
-        <label className="chkline">
-          <input type="checkbox" checked={dropship} onChange={(e) => { setDropship(e.target.checked); if (e.target.checked) setIsStock(false); }} /> 代采品（接单后为此单采购、成本直挂订单）
-        </label>
+        {!quoteOnly && (
+          <div className="qgrid" style={{ marginTop: 4 }}>
+            <label>
+              期初库存数量（可选）
+              <input inputMode="decimal" placeholder="0" value={openQty} onChange={(e) => setOpenQty(e.target.value)} />
+            </label>
+            <label>
+              期初单价（元，留空用进价）
+              <input inputMode="decimal" placeholder={cost.trim() || '0.00'} value={openCost} onChange={(e) => setOpenCost(e.target.value)} />
+            </label>
+          </div>
+        )}
         {!editId && err && <p className="form-err" style={{ marginTop: 8 }}>{err}</p>}
         <button className="btn btn-primary" style={{ marginTop: 8 }} onClick={() => void add()}>
           添加
