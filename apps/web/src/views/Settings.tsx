@@ -4,6 +4,7 @@ import type { Repository, StoredSetting } from '@app/store';
 import { currencyDef } from '../format';
 import type { CurrencyDef } from '../format';
 import {
+  ADVANCED_KEY,
   APP_SCOPE,
   BASIS_KEY,
   CURRENCIES_KEY,
@@ -12,6 +13,7 @@ import {
   MULTICURRENCY_KEY,
   RECON_DAY_KEY,
   RECON_LEAD_KEY,
+  advancedOn,
   basisOf,
   currenciesOf,
   displayCurrencyOf,
@@ -40,6 +42,7 @@ export default function Settings({
   usedCurrencies: Set<string>;
   reload: () => Promise<void>;
 }) {
+  const advanced = advancedOn(settings);
   const basis = basisOf(settings);
   const reconDay = reconcileDayOf(settings);
   const reconLead = reconcileLeadOf(settings);
@@ -121,6 +124,19 @@ export default function Settings({
         <span className="muted">全局 · 应用于所有账本</span>
       </div>
 
+      <div className="card">
+        <label className="chkline">
+          <input type="checkbox" checked={advanced} onChange={(e) => void save(ADVANCED_KEY, e.target.checked ? 'on' : 'off')} disabled={saving} />
+          开启商家进阶功能
+        </label>
+        <p className="muted small">
+          打开后解锁：进销存（商品 / 库存 / 采购 / 供应商 / 应收应付）、额外费用、月度对账、多币种、记账口径切换、投资账本。
+          只记日常小账的话保持关闭，界面更清爽。
+        </p>
+      </div>
+
+      {advanced && (
+        <>
       <div className="card">
         <h3>记账口径</h3>
         <p className="muted small">
@@ -297,6 +313,8 @@ export default function Settings({
           </>
         )}
       </div>
+        </>
+      )}
     </>
   );
 }

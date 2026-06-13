@@ -5,7 +5,7 @@ import type { Repository, StoredAccount, StoredBook, StoredBudget, StoredCustome
 import { BOOK_META, createBookWithChart, isDesktop, ready } from './db';
 import { daysBetween, fmtMoney, setCurrencyRegistry, todayISO } from './format';
 import { customerOrderStatus, payableLedger } from './biz';
-import { basisOf, convertCtxOf, currenciesOf, dueLeadOf, multiCurrencyOn, reconcileDayOf, reconcileLeadOf, reconcileTargetDate, reconcileWindowOpen } from './settings';
+import { advancedOn, basisOf, convertCtxOf, currenciesOf, dueLeadOf, multiCurrencyOn, reconcileDayOf, reconcileLeadOf, reconcileTargetDate, reconcileWindowOpen } from './settings';
 import OverviewAll from './views/OverviewAll';
 import Dashboard from './views/Dashboard';
 import Transactions from './views/Transactions';
@@ -19,7 +19,6 @@ import Products from './views/Products';
 import Inventory from './views/Inventory';
 import Purchases from './views/Purchases';
 import FeeDefinitions from './views/FeeDefinitions';
-import Documents from './views/Documents';
 import Reconcile from './views/Reconcile';
 import Settings from './views/Settings';
 
@@ -65,7 +64,6 @@ const TABS: Record<BookType, Array<[View, string]>> = {
     ['inventory', '库存'],
     ['purchases', '采购'],
     ['fees', '费用'],
-    ['documents', '单据'],
     ['txns', '流水'],
     ['budgets', '预算'],
     ['accounts', '账户'],
@@ -76,6 +74,15 @@ const TABS: Record<BookType, Array<[View, string]>> = {
     ['accounts', '账户'],
   ],
 };
+
+// 极简模式（默认）下的生意账本 tab：跟个人账本几乎一样，隐藏进销存/采购/费用等专业功能。
+// 需要的用户在「设置 → 开启商家进阶功能」后看到完整 TABS.business。
+const SIMPLE_BUSINESS_TABS: Array<[View, string]> = [
+  ['dashboard', '总览'],
+  ['txns', '流水'],
+  ['budgets', '预算'],
+  ['accounts', '账户'],
+];
 
 export default function App() {
   const [repo, setRepo] = useState<Repository | null>(null);
@@ -149,6 +156,8 @@ export default function App() {
   // 全局设置（app 级，对所有账本生效）；在任何提前 return 之前调用，保证 Hook 顺序稳定。
   const convert = useMemo(() => convertCtxOf(settings, mcEnabled), [settings, mcEnabled]);
   const basis = useMemo(() => basisOf(settings), [settings]);
+  // 商家进阶功能开关（默认关＝极简）：门控生意账本专业 tab、对账入口、投资账本类型、专业提醒横幅。
+  const advanced = advancedOn(settings);
 
   // 对账提醒：全局配置对账日 + 进入提前窗口 + 当前账本仍有未核销分录（已对账则不扰）。
   const reconReminder = useMemo(() => {
@@ -237,10 +246,12 @@ export default function App() {
   const data: AppData | null = curBook
     ? { repo, book: curBook, ...scoped, allTxns: txns, basis, convert, mcEnabled, reload: () => loadFrom(repo) }
     : null;
-  const tabs = curBook ? TABS[curBook.type] : [];
-  const showReminder = reconReminder && curBook && !reconDismissed.has(curBook.id);
-  const showDueReminder = dueReminder && curBook && !dueDismissed.has(curBook.id);
-  const showApDueReminder = apDueReminder && curBook && !apDueDismissed.has(curBook.id);
+  // 极简模式下生意账本只显示精简 tab；个人/投资账本本就简单，不变。
+  const tabs = curBook ? (curBook.type === 'business' && !advanced ? SIMPLE_BUSINESS_TABS : TABS[curBook.type]) : [];
+  // 提醒横幅（对账 / 往来到期）属进阶功能，极简模式下不弹（也没有对应 tab 可去）。
+  const showReminder = advanced && reconReminder && curBook && !reconDismissed.has(curBook.id);
+  const showDueReminder = advanced && dueReminder && curBook && !dueDismissed.has(curBook.id);
+  const showApDueReminder = advanced && apDueReminder && curBook && !apDueDismissed.has(curBook.id);
 
   return (
     <div className="app">
@@ -276,7 +287,7 @@ export default function App() {
             <select value={nbType} onChange={(e) => setNbType(e.target.value as BookType)}>
               <option value="personal">个人</option>
               <option value="business">生意</option>
-              <option value="investment">投资</option>
+              {advanced && <option value="investment">投资</option>}
             </select>
             <div className="nb-actions">
               <button className="btn btn-primary nb-btn" onClick={() => void createBook()}>
@@ -310,9 +321,11 @@ export default function App() {
           </>
         )}
 
-        <button className={`book settings-link${cur === RECONCILE ? ' on' : ''}`} onClick={() => setCur(RECONCILE)}>
-          ✓ 对账
-        </button>
+        {advanced && (
+          <button className={`book settings-link${cur === RECONCILE ? ' on' : ''}`} onClick={() => setCur(RECONCILE)}>
+            ✓ 对账
+          </button>
+        )}
         <button className={`book settings-link${cur === SETTINGS ? ' on' : ''}`} onClick={() => setCur(SETTINGS)}>
           ⚙ 设置
         </button>
@@ -415,7 +428,6 @@ export default function App() {
             {view === 'inventory' && <Inventory data={data} />}
             {view === 'purchases' && <Purchases data={data} />}
             {view === 'fees' && <FeeDefinitions data={data} />}
-            {view === 'documents' && <Documents data={data} />}
           </>
         )}
       </main>

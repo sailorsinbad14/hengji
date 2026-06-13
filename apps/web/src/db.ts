@@ -1,4 +1,4 @@
-import { adjustBalanceEntry, creditPurchaseEntry, currentAvgCost, defaultChartFor, expandDocumentEntry, expandEntry, orderRevenueEntry, orderTotal, toMinor } from '@app/core';
+import { adjustBalanceEntry, creditPurchaseEntry, currentAvgCost, defaultChartFor, expandEntry, orderRevenueEntry, orderTotal, toMinor } from '@app/core';
 import type { Account, Book, BookType, EntryInput } from '@app/core';
 import { InMemoryRepository } from '@app/store';
 import type { Repository } from '@app/store';
@@ -272,35 +272,6 @@ async function bootstrapDemo(): Promise<Repository> {
   await repo.addOrder({
     id: commOrderId, bookId: biz.book.id, customerId: custId, date: daysAgo(1), currency: 'CNY', status: 'pending_ship', note: '含佣金', revenueTxnId: null,
     lines: [{ id: genId(), orderId: commOrderId, name: 'A型工具', qty: 4, unitPrice: toMinor(125), productId: prodA, feeIds: [commId] }],
-  });
-
-  // 插件地基（北极星 Step 1）——一张「平台电商销售单」：声明式单据展开成 4 腿平衡分录。
-  // 商品 ¥1,000；佣金 ≥¥600→4%=¥40；物流费固定 ¥12 → 平台应收款 ¥948（=平台实际打款）。
-  const shipFeeId = genId();
-  await repo.addFeeDefinition({ id: shipFeeId, bookId: biz.book.id, name: '物流费', calcType: 'fixed', tiers: [{ threshold: 0, value: toMinor(12) }], archived: false });
-  const psCommAcct = genId();
-  await repo.addAccount({ id: psCommAcct, bookId: biz.book.id, name: '平台佣金', type: 'expense', parentId: null, currency: 'CNY', archived: false });
-  const psShipAcct = genId();
-  await repo.addAccount({ id: psShipAcct, bookId: biz.book.id, name: '物流费', type: 'expense', parentId: null, currency: 'CNY', archived: false });
-  const psArAcct = genId();
-  await repo.addAccount({ id: psArAcct, bookId: biz.book.id, name: '平台应收款', type: 'asset', parentId: null, currency: 'CNY', archived: false });
-  const psLines = [{ name: '数码配件', qty: 1, unitPrice: toMinor(1000) }];
-  const psTxn = expandDocumentEntry(
-    [
-      { accountId: biz.byName('营业收入'), side: 'credit', amount: { src: 'lineTotal' } },
-      { accountId: psCommAcct, side: 'debit', amount: { src: 'feeField', key: 'commissionFeeId' } },
-      { accountId: psShipAcct, side: 'debit', amount: { src: 'feeField', key: 'shippingFeeId' } },
-      { accountId: psArAcct, side: 'debit', balance: true },
-    ],
-    { lineTotal: toMinor(1000), feeFields: { commissionFeeId: toMinor(40), shippingFeeId: toMinor(12) }, fields: {} },
-    { bookId: biz.book.id, date: daysAgo(1), currency: 'CNY', payee: '拼多多旗舰店', note: '平台电商销售单' },
-    genId,
-  );
-  await repo.addTransaction(psTxn);
-  await repo.addPluginDocument({
-    id: genId(), bookId: biz.book.id, pluginId: 'builtin', docType: 'platformSale',
-    data: { shop: '拼多多旗舰店', date: daysAgo(1), lines: psLines, commissionFeeId: commId, shippingFeeId: shipFeeId },
-    txnIds: [psTxn.id],
   });
 
   // 一张美元订单——展示「业务 AR 多币种」：海外客户赊购 $1,800，应收记 USD 子科目，

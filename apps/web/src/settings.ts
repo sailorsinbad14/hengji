@@ -76,6 +76,13 @@ export function dueLeadOf(settings: StoredSetting[]): number | null {
   return Number.isFinite(n) && n >= 0 ? n : DEFAULT_DUE_LEAD;
 }
 
+// —— 商家进阶功能开关（app 级）——默认关＝极简模式：生意账本只留 总览/流水/预算/账户，
+// 隐藏进销存/采购/对账/多币种/记账口径等专业功能。需要的用户在设置里打开。 ——
+export const ADVANCED_KEY = 'advancedFeatures';
+export function advancedOn(settings: StoredSetting[]): boolean {
+  return settings.find((s) => s.scope === APP_SCOPE && s.key === ADVANCED_KEY)?.value === 'on';
+}
+
 // —— 多币种开关（app 级）——默认关：纯人民币 UI，隐藏币种管理与账户币种选择 ——
 export const MULTICURRENCY_KEY = 'multiCurrency';
 export function multiCurrencyOn(settings: StoredSetting[]): boolean {
