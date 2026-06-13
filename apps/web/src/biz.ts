@@ -257,10 +257,13 @@ export async function saveOrder(
   const shortfalls = orderShortfalls(lines, products, movements);
   const status: OrderStatus = shortfalls.length > 0 ? 'pending_purchase' : 'pending_ship';
   await repo.addOrder({ id: orderId, bookId: book.id, customerId: opts.customerId, date: opts.date, currency: opts.currency, status, note: opts.note, revenueTxnId: null, lines });
-  if (shortfalls.length > 0) {
+  // 每个缺货商品各生成一张草稿采购单——不同商品可来自不同供应商，各自独立确认。
+  for (const s of shortfalls) {
     const purchaseId = genId();
-    const draftLines: PurchaseLine[] = shortfalls.map((s) => ({ id: genId(), purchaseId, productId: s.productId, name: s.name, qty: s.missing, unitCost: s.costPrice }));
-    await repo.addPurchase({ id: purchaseId, bookId: book.id, supplierId: '', kind: 'dropship', orderId, destAccountId: null, date: opts.date, payMode: 'credit', note: '', txnId: null, lines: draftLines });
+    await repo.addPurchase({
+      id: purchaseId, bookId: book.id, supplierId: '', kind: 'dropship', orderId, destAccountId: null, date: opts.date, payMode: 'credit', note: '', txnId: null,
+      lines: [{ id: genId(), purchaseId, productId: s.productId, name: s.name, qty: s.missing, unitCost: s.costPrice }],
+    });
   }
 }
 
@@ -801,12 +804,15 @@ export async function confirmOrderPurchase(
   }
   await repo.addTransaction(txn);
   await repo.updatePurchase(opts.purchase.id, { supplierId: opts.supplier.id, date: opts.date, payMode: opts.payMode, note: opts.note, txnId: txn.id, lines });
-  if (opts.purchase.orderId) {
-    const order = await repo.getOrder(opts.purchase.orderId);
-    if (order && order.status === 'pending_purchase') {
-      await repo.updateOrder(order.id, { status: 'pending_ship' });
-    }
-  }
+  if (opts.purchase.orderId) await advanceIfNoDrafts(repo, book, opts.purchase.orderId);
+}
+
+/** 订单的草稿采购单全部确认/作废后，从「待采购」转「待发货」（一单可有多张草稿，逐张处理）。 */
+async function advanceIfNoDrafts(repo: Repository, book: StoredBook, orderId: string): Promise<void> {
+  const order = await repo.getOrder(orderId);
+  if (!order || order.status !== 'pending_purchase') return;
+  const remaining = (await repo.listPurchases({ bookId: book.id, orderId })).filter((p) => !p.txnId);
+  if (remaining.length === 0) await repo.updateOrder(orderId, { status: 'pending_ship' });
 }
 
 /**
@@ -815,12 +821,7 @@ export async function confirmOrderPurchase(
  */
 export async function voidDraftPurchase(repo: Repository, book: StoredBook, purchase: StoredPurchase): Promise<void> {
   await repo.removePurchase(purchase.id);
-  if (purchase.orderId) {
-    const order = await repo.getOrder(purchase.orderId);
-    if (order && order.status === 'pending_purchase') {
-      await repo.updateOrder(order.id, { status: 'pending_ship' });
-    }
-  }
+  if (purchase.orderId) await advanceIfNoDrafts(repo, book, purchase.orderId);
 }
 
 /**

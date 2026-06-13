@@ -259,17 +259,13 @@ export default function Orders({ data }: { data: AppData }) {
     setErr(null);
   }
 
-  /** 找某订单的草稿采购单（开单不足时自动生成，txnId=null）。 */
-  const draftOf = (orderId: string): StoredPurchase | undefined => purchases.find((p) => p.orderId === orderId && !p.txnId);
+  /** 某订单的全部草稿采购单（每个缺货商品各一张，txnId=null）——各自独立选供应商确认。 */
+  const draftsOf = (orderId: string): StoredPurchase[] => purchases.filter((p) => p.orderId === orderId && !p.txnId);
 
-  function openPurchase(order: StoredOrder): void {
+  /** 打开某张草稿采购单的确认表单（purchaseFor 记的是草稿采购单 id）。 */
+  function openPurchase(draft: StoredPurchase): void {
     setErr(null);
-    const draft = draftOf(order.id);
-    if (!draft) {
-      setErr('未找到该订单的待采购单');
-      return;
-    }
-    setPurchaseFor(order.id);
+    setPurchaseFor(draft.id);
     setPSup(suppliers[0]?.id ?? '');
     setPMode('credit');
     setPAcct('');
@@ -559,9 +555,11 @@ export default function Orders({ data }: { data: AppData }) {
               <div className="arow-btns">
                 {o.status === 'pending_purchase' && (
                   <>
-                    <button className="lnk" onClick={() => openPurchase(o)}>
-                      为此单采购
-                    </button>
+                    {draftsOf(o.id).map((d) => (
+                      <button className="lnk" key={d.id} onClick={() => openPurchase(d)}>
+                        采购：{d.lines.map((l) => `${l.name}×${l.qty}`).join('，')}
+                      </button>
+                    ))}
                     <button className="lnk danger" onClick={() => void doCancel(o)}>
                       取消
                     </button>
@@ -583,14 +581,14 @@ export default function Orders({ data }: { data: AppData }) {
                   </button>
                 )}
               </div>
-              {purchaseFor === o.id && (() => {
-                const draft = draftOf(o.id);
-                if (!draft) return null;
+              {draftsOf(o.id).filter((d) => purchaseFor === d.id).map((draft) => {
                 const purAccts = cashAccounts.filter((a) => a.currency === 'CNY' && a.name !== '库存商品' && a.name !== '代采在途成本');
                 const effPurAcct = purAccts.some((a) => a.id === pAcct) ? pAcct : (purAccts[0]?.id ?? '');
-                const covered = orderShortfalls(o.lines, products, movements).length === 0; // 折中：库存已够则可作废
+                // 折中：这张草稿对应的商品在库存里现已充足 → 可作废本草稿，无需采购
+                const draftProdId = draft.lines[0]?.productId;
+                const covered = !orderShortfalls(o.lines, products, movements).some((s) => s.productId === draftProdId);
                 return (
-                  <div className="collect">
+                  <div className="collect" key={draft.id}>
                     <p className="muted small" style={{ marginTop: 0 }}>为此单不足的商品采购，录入采购价。成本直挂订单，完成时结转。</p>
                     {covered && (
                       <p className="muted small" style={{ marginTop: 0 }}>库存现已充足——可「作废」本采购单，订单直接转「待发货」从库存出货。</p>
@@ -662,7 +660,7 @@ export default function Orders({ data }: { data: AppData }) {
                     </div>
                   </div>
                 );
-              })()}
+              })}
               {collectFor === o.id && (() => {
                 // 收款账户限同币种（跨币种收款属换汇，不在此处理）
                 const collectAccts = cashAccounts.filter((a) => a.currency === o.currency);
