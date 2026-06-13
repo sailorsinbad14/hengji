@@ -130,6 +130,19 @@
 - **积木基础元素（六类）**：科目 / 字段(变量) / 事件 / 条件 / 运算 / 分录腿（借|贷+科目+公式）。
 - **落地路径（自底向上，别从 L3 起）**：先定声明式格式 + **让内置账本"吃狗粮"**（personal/business 自身用同一注册表实现）→ L1 表单编辑器 → L2 积木。**不在内置账本稳定前冻结插件 API**。种子可在做 C 期单据展开时顺手埋（展开规则做成"可注册"而非写死）。
 
+### ✅ 地基 Step 1 已落地（2026-06-13）：声明式单据运行时 + plugin_documents + 平台销售单吃狗粮
+
+第一步＝**地基，不是编辑器**。落地了「声明式单据 → 候选平衡分录」的确定性运行时 + 实例存储 + 一张内置单据验证全链路。
+
+- **core `plugin.ts`**：`DocumentType{fields, entries[{legs}]}` 声明式 schema；`AccountRef`(named/field)、`AmountSource`(lineTotal/feeField/field/fixed)、`PostingLeg`(side + amount 或 balance)；`expandDocumentEntry(已解析 legs, EvalScope, opts, genId)`——借取正/贷取负、**0 额腿丢弃**、**一条平衡腿吃差额**(应收当塞子)、`assertBalanced` 防火墙。范式同 business.ts：**core 吃已解析 accountId，账户 ensure-or-create 留 web**。
+- **公式引擎复用**：`computeFees` 由 web 预算入 `EvalScope.feeFields`，作为 `feeField` 来源被引用，零重复逻辑。
+- **store M16 `plugin_documents`**：存**实例**(data + txnIds JSON)；**DocumentType 此期硬编码在 web 注册表、不入库**（待 L1 编辑器才持久化类型）。纯新增表、最低风险迁移。
+- **吃狗粮＝「平台电商销售单」**(`apps/web/src/documents/registry.ts`)：4 腿＝贷营业收入(商品额)/借平台佣金/借物流费/借平台应收款(平衡腿)；佣金/物流引用账本级 `FeeDefinition`。web `docs.ts` 编排(buildScope/previewDocument 纯预览/saveDocument/voidDocument)，`Documents.tsx` 注册表字段驱动表单 + 实时分录预览 + 借贷平衡徽章(防火墙画在 UI)。
+- **v1 有意从简（决议）**：① 金额用**来源枚举非表达式树**(覆盖发票场景，向后可加树为超集)；② **平台应收款＝独立顶层资产**(不入按客户 AR 体系，避免 Orders 应收概览合计与账龄分桶错位)；③ **两段式收款(平台打款)后置**——故收付实现制 cash 口径暂不识别平台应收款(其余额会让 cash 收入高估未到账金额；默认 accrual 不受影响)；④ 单一币种 CNY；⑤ 可视化编辑器/子科目自动建/沙箱表达式/市场 均后置。
+- **已过对抗式 review（5 维 22 发现→16 确认，修 11/记 2）**：插件按名 ensure 的科目(营业收入/平台佣金/物流费/平台应收款)已纳入「自动管理」保护(禁改名/归档)；防火墙 expandDocumentEntry 自守整数性(assertMinor)；逐行非负/必填名校验；归档费用历史重算口径对齐；同费用多字段去重；平衡腿贷方显示「应付平台」。
+- **followup（2 项）**：① cash 口径接入平台应收款(随两段式收款一并做)；② saveDocument 多 entry 非事务原子性(与 completeOrder 同源，待 Repository 加事务原语统一治)。
+- **下一步**：L1 表单式编辑器（让 DocumentType 可视化创建并入库），或两段式收款 + cash 口径接入。
+
 ### Flagship 插件规格：高级开单 / Invoice（验收基准，post-1.0，默认不装、可选）
 
 第一个官方插件，也是**插件系统的验收标准**——"编辑器/运行时能不能拼出这张单"，能即够强。原型＝用户手工开的外贸 invoice（代采 + 库存分区、阶梯佣金、运费打包、调整、总计、产品图）。每设计一个插件原语都拿它验。
