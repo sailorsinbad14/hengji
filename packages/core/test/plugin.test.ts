@@ -83,4 +83,35 @@ describe('plugin 声明式单据运行时（插件地基）', () => {
     ];
     expect(() => expandDocumentEntry(legs, scope({ lineTotal: 0 }), { bookId: 'b1', date: '2026-06-13' }, counter())).toThrow();
   });
+
+  it('平衡腿差额恰为 0 → 不落平衡腿（仍配平）', () => {
+    const legs: ResolvedLeg[] = [
+      { accountId: 'a', side: 'debit', amount: { src: 'fixed', value: 5000 } },
+      { accountId: 'b', side: 'credit', amount: { src: 'fixed', value: 5000 } },
+      { accountId: 'ar', side: 'debit', balance: true },
+    ];
+    const txn = expandDocumentEntry(legs, scope(), { bookId: 'b1', date: '2026-06-13' }, counter());
+    expect(txn.postings.some((p) => p.accountId === 'ar')).toBe(false); // 差额 0 → 平衡腿不落
+    expect(txn.postings.reduce((s, p) => s + p.amount, 0)).toBe(0);
+  });
+
+  it('平衡腿吃负差额 → 落贷方（费用>商品额=倒欠）', () => {
+    // 商品 ¥100，费用 ¥150 > 商品 → 应收平衡腿为负（贷方）
+    const legs: ResolvedLeg[] = [
+      { accountId: 'rev', side: 'credit', amount: { src: 'lineTotal' } },
+      { accountId: 'fee', side: 'debit', amount: { src: 'feeField', key: 'f' } },
+      { accountId: 'ar', side: 'debit', balance: true },
+    ];
+    const txn = expandDocumentEntry(legs, scope({ lineTotal: 10000, feeFields: { f: 15000 } }), { bookId: 'b1', date: '2026-06-13' }, counter());
+    expect(amt(txn, 'ar')).toBe(-5000); // 100 − 150 = −50（贷方，倒欠）
+    expect(txn.postings.reduce((s, p) => s + p.amount, 0)).toBe(0);
+  });
+
+  it('防火墙自守整数性：非整数金额来源 → 抛错（浮点不得绕过）', () => {
+    const legs: ResolvedLeg[] = [
+      { accountId: 'a', side: 'debit', amount: { src: 'fixed', value: 3050.5 } },
+      { accountId: 'b', side: 'credit', balance: true },
+    ];
+    expect(() => expandDocumentEntry(legs, scope(), { bookId: 'b1', date: '2026-06-13' }, counter())).toThrow();
+  });
 });

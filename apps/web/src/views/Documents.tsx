@@ -32,7 +32,9 @@ export default function Documents({ data }: { data: AppData }) {
 
   async function refresh(): Promise<void> {
     const [fd, ds] = await Promise.all([
-      repo.listFeeDefinitions({ bookId: book.id }),
+      // 含归档：已开单据按 feeId 重算展示金额，归档费用仍需复现历史金额（与 saveDocument 落库口径一致）；
+      // 下拉选项另在 feeOptions 过滤掉归档，故新开单不会选到归档费用。
+      repo.listFeeDefinitions({ bookId: book.id, includeArchived: true }),
       repo.listPluginDocuments({ bookId: book.id, docType: 'platformSale' }),
     ]);
     setFeeDefs(fd);
@@ -75,9 +77,14 @@ export default function Documents({ data }: { data: AppData }) {
 
   async function onVoid(doc: StoredPluginDocument): Promise<void> {
     if (!confirm('作废这张单？将撤销它生成的记账分录（余额回退）。')) return;
-    await voidDocument(repo, doc);
-    await refresh();
-    await reload();
+    setErr(null);
+    try {
+      await voidDocument(repo, doc);
+      await refresh();
+      await reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e) + '（作废可重试，已撤销的分录不会重复）');
+    }
   }
 
   const feeOptions = feeDefs.filter((f) => !f.archived);
@@ -88,6 +95,12 @@ export default function Documents({ data }: { data: AppData }) {
         <h2>{book.name} · {docType.name}</h2>
         <span className="muted">平台卖货：商品额计收入、佣金/物流计费用、差额进「平台应收款」——一张单自动配平</span>
       </div>
+
+      {data.mcEnabled && (
+        <p className="muted small" style={{ marginTop: -4 }}>
+          ℹ️ 平台销售单当前仅支持人民币（CNY）记账，金额请按人民币填写。
+        </p>
+      )}
 
       <div className="card">
         <h3>开单</h3>
@@ -198,6 +211,8 @@ export default function Documents({ data }: { data: AppData }) {
           const shopName = typeof doc.data.shop === 'string' && doc.data.shop ? doc.data.shop : '（未填店铺）';
           const docDate = typeof doc.data.date === 'string' ? doc.data.date : '';
           const recv = p.legs.find((l) => l.name === '平台应收款');
+          // 平衡腿落贷方(费用>商品额=倒欠平台)时语义为「应付」，不能标成正的「实收」；无平衡腿(费用=商品额)时实收为 0
+          const recvLabel = recv?.side === 'credit' ? '应付平台' : '实收';
           return (
             <div className="brow" key={doc.id}>
               <div className="bhead">
@@ -206,7 +221,7 @@ export default function Documents({ data }: { data: AppData }) {
                   <span className="chip"> {docDate}</span>
                 </span>
                 <span className="bnum muted">
-                  商品 {fmtMoney(p.lineTotal)} · 实收 {fmtMoney(recv?.amount ?? p.lineTotal)}
+                  商品 {fmtMoney(p.lineTotal)} · {recvLabel} {fmtMoney(recv?.amount ?? 0)}
                 </span>
                 <div className="arow-btns">
                   <button className="lnk danger" onClick={() => void onVoid(doc)}>

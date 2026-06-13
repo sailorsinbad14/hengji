@@ -682,13 +682,16 @@ export function runRepositoryContract(name: string, makeRepo: (now: Clock) => Re
       expect(got.txnIds).toEqual(['t1', 't2']);
       // 账本校验
       await expect(repo.addPluginDocument({ id: 'dX', bookId: 'ghost', pluginId: 'builtin', docType: 'platformSale', data: {}, txnIds: [] })).rejects.toThrow();
-      // list 过滤：bookId / pluginId / docType
+      // list 过滤：bookId / pluginId / docType（每维度都有会被排除的负向 fixture，确保过滤真生效）
       await repo.addPluginDocument({ id: 'd2', bookId: B2, pluginId: 'builtin', docType: 'other', data: {}, txnIds: [] });
       await repo.addPluginDocument({ id: 'd3', bookId: B1, pluginId: 'builtin', docType: 'platformSale', data: {}, txnIds: [] });
+      await repo.addPluginDocument({ id: 'd4', bookId: B1, pluginId: 'thirdparty', docType: 'other', data: {}, txnIds: [] });
       expect((await repo.listPluginDocuments({ bookId: B2 })).map((x) => x.id).sort()).toEqual(['d1', 'd2']);
       expect((await repo.listPluginDocuments({ docType: 'platformSale' })).map((x) => x.id).sort()).toEqual(['d1', 'd3']);
       expect((await repo.listPluginDocuments({ bookId: B2, docType: 'platformSale' })).map((x) => x.id)).toEqual(['d1']);
-      expect((await repo.listPluginDocuments({ pluginId: 'builtin' })).length).toBe(3);
+      // pluginId 过滤需能把别的插件排除掉（不同 pluginId 的 d4 不得混入 builtin 结果）
+      expect((await repo.listPluginDocuments({ pluginId: 'builtin' })).map((x) => x.id).sort()).toEqual(['d1', 'd2', 'd3']);
+      expect((await repo.listPluginDocuments({ pluginId: 'thirdparty' })).map((x) => x.id)).toEqual(['d4']);
       // removePluginDocument 软删：get 返 null、list 排除、重复删抛错
       await repo.removePluginDocument('d1');
       expect(await repo.getPluginDocument('d1')).toBeNull();

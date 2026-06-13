@@ -1,5 +1,6 @@
 import type { AccountType, Posting, Transaction } from './types';
 import { assertBalanced } from './ledger';
+import { assertMinor } from './money';
 
 /**
  * 插件地基（north-star 第一步）：声明式单据 → 候选平衡分录的确定性运行时。
@@ -141,7 +142,11 @@ export function expandDocumentEntry(
 
   const currency = opts.currency ?? 'CNY';
   const txnId = genId();
-  const mk = (accountId: string, amount: number): Posting => ({ id: genId(), txnId, accountId, amount, currency });
+  // 防火墙自守整数最小单位：fixed/field 来源是给插件作者透传金额的入口，core 不能假设 web 已 round。
+  const mk = (accountId: string, amount: number): Posting => {
+    assertMinor(amount, 'posting amount');
+    return { id: genId(), txnId, accountId, amount, currency };
+  };
 
   const postings: Posting[] = [];
   let runningSum = 0;

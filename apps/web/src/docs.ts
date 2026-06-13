@@ -39,12 +39,14 @@ function buildScope(docType: DocumentType, data: Record<string, unknown>, feeDef
   const lines = docLines(data);
   const lineTotal = lines.reduce((s, l) => s + Math.round(l.qty * l.unitPrice), 0);
   const feeFields: Record<string, number> = {};
+  const consumed = new Set<string>(); // 同一 FeeDefinition 被多个 fee 字段选中时只计一次，避免重复扣费
   for (const f of docType.fields) {
     if (f.type !== 'fee') continue;
     const feeId = data[f.key];
-    if (typeof feeId !== 'string' || !feeId) continue;
+    if (typeof feeId !== 'string' || !feeId || consumed.has(feeId)) continue;
     const feeDef = feeDefs.find((fd) => fd.id === feeId);
     if (!feeDef) continue;
+    consumed.add(feeId);
     // 该费用应用到本单全部商品行（computeFees 按分组合计定阶梯档）
     const feeLines: FeeLine[] = lines.map((l) => ({ amount: Math.round(l.qty * l.unitPrice), qty: l.qty, feeIds: [feeDef.id] }));
     feeFields[f.key] = feesTotal(computeFees(feeLines, [feeDef]));
@@ -75,6 +77,7 @@ export interface DocPreview {
 export function previewDocument(docType: DocumentType, data: Record<string, unknown>, feeDefs: StoredFeeDefinition[]): DocPreview {
   const scope = buildScope(docType, data, feeDefs);
   const legs: PreviewLeg[] = [];
+  let allBalanced = true; // 逐 entry 校验：每笔内部(含平衡腿)借贷相等，才算整体平衡
   for (const entry of docType.entries) {
     let running = 0;
     const balanceLeg = entry.legs.find((l) => l.balance);
@@ -85,14 +88,16 @@ export function previewDocument(docType: DocumentType, data: Record<string, unkn
       running += leg.side === 'debit' ? mag : -mag;
       legs.push({ name: refName(leg.account), side: leg.side, amount: mag });
     }
-    if (balanceLeg && running !== 0) {
-      const signed = -running;
-      legs.push({ name: refName(balanceLeg.account), side: signed >= 0 ? 'debit' : 'credit', amount: Math.abs(signed) });
+    if (balanceLeg) {
+      // 平衡腿吃差额：running<0 落借（如平台应收款），running>0 落贷（费用>商品额=倒欠）；差额 0 不落腿
+      if (running !== 0) legs.push({ name: refName(balanceLeg.account), side: running < 0 ? 'debit' : 'credit', amount: Math.abs(running) });
+    } else if (running !== 0) {
+      allBalanced = false; // 无平衡腿且本笔不配平
     }
   }
   const debit = legs.filter((l) => l.side === 'debit').reduce((s, l) => s + l.amount, 0);
   const credit = legs.filter((l) => l.side === 'credit').reduce((s, l) => s + l.amount, 0);
-  return { legs, debit, credit, balanced: debit === credit, lineTotal: scope.lineTotal };
+  return { legs, debit, credit, balanced: allBalanced, lineTotal: scope.lineTotal };
 }
 
 async function resolveLegAccount(repo: Repository, book: StoredBook, ref: AccountRef, data: Record<string, unknown>): Promise<string> {
@@ -105,9 +110,16 @@ async function resolveLegAccount(repo: Repository, book: StoredBook, ref: Accoun
 /** 保存单据：解析账户 → core 展开成平衡分录 → 逐笔落库 → 存单据实例（带 txnIds）。 */
 export async function saveDocument(repo: Repository, book: StoredBook, docType: DocumentType, data: Record<string, unknown>): Promise<void> {
   const feeDefs = await repo.listFeeDefinitions({ bookId: book.id, includeArchived: true });
+  // 逐行校验：负数会被混合行净额绕过聚合校验、污染账本；有金额的行必须有名称
+  for (const l of docLines(data)) {
+    if (l.qty < 0 || l.unitPrice < 0) throw new Error('商品行的数量、单价不能为负');
+    if (!l.name && Math.round(l.qty * l.unitPrice) !== 0) throw new Error('有金额的商品行必须填写名称');
+  }
   const scope = buildScope(docType, data, feeDefs);
   if (scope.lineTotal <= 0) throw new Error('商品金额为 0，无法保存');
   const { pluginId, docType: dt } = splitDocTypeId(docType.id);
+  // 注：多 entry 非事务——若中途 addTransaction 失败、addPluginDocument 未执行，已落的交易会成为
+  // Documents 页够不到的孤儿（需到流水页手删）。与 biz.ts completeOrder 同源取舍；待 Repository 加事务原语统一治。
   const payee = typeof data.shop === 'string' ? data.shop : '';
   const date = typeof data.date === 'string' && data.date ? data.date : new Date().toISOString().slice(0, 10);
   const txnIds: string[] = [];

@@ -6,6 +6,11 @@ import type { AppData } from '../App';
 import { genId } from '../db';
 import { currencyList, fmtMoney } from '../format';
 
+// 生意/插件流程按显示名 ensure-or-create 的科目（平台销售单等）：禁改名/归档，
+// 否则断开名字关联——再开单时 ensureNamedAccount 按旧名找不到、重建新科目，余额被劈成两个；
+// 改「营业收入」还会让 completeOrder 直接抛错。与应收/应付子科目同等保护。
+const NAMED_MANAGED = new Set(['营业收入', '平台佣金', '物流费', '平台应收款']);
+
 const GROUPS: Array<{ type: AccountType; label: string; hint: string }> = [
   { type: 'asset', label: '资产账户', hint: '现金 / 银行卡 / 钱包等' },
   { type: 'liability', label: '负债账户', hint: '信用卡 / 花呗 / 借款等' },
@@ -43,10 +48,10 @@ export default function Accounts({ data }: { data: AppData }) {
   const usable = all.filter((a) => !a.deleted);
   // 仅开启多币种 + 资产/负债账户才可选币种；其余沿用人民币
   const currencyMatters = data.mcEnabled && (newType === 'asset' || newType === 'liability');
-  // 仅"真金白银"账户可设为共享：资产/负债，且非自动托管/虚拟账户（应收应付/库存/代采在途）
+  // 仅"真金白银"账户可设为共享：资产/负债，且非自动托管/虚拟账户（应收应付/库存/代采在途/平台单据科目）
   const VIRTUAL = new Set(['库存商品', '代采在途成本']);
   const isManaged = (name: string): boolean =>
-    name === '应收账款' || name.startsWith('应收账款/') || name === '应付账款' || name.startsWith('应付账款/');
+    name === '应收账款' || name.startsWith('应收账款/') || name === '应付账款' || name.startsWith('应付账款/') || NAMED_MANAGED.has(name);
   const canShare = (a: StoredAccount): boolean =>
     (a.type === 'asset' || a.type === 'liability') && !isManaged(a.name) && !VIRTUAL.has(a.name);
   const shareableType = newType === 'asset' || newType === 'liability';
@@ -121,7 +126,7 @@ export default function Accounts({ data }: { data: AppData }) {
               // 应收账款/应付账款及其按客户/供应商自动建的子科目由生意流程托管：禁止改名/归档，
               // 否则会断开「应收账款/客户名」「应付账款/供应商名」的名字关联、或被默认 listAccounts 排除而漏算。
               const managed =
-                a.name === '应收账款' || a.name.startsWith('应收账款/') || a.name === '应付账款' || a.name.startsWith('应付账款/');
+                a.name === '应收账款' || a.name.startsWith('应收账款/') || a.name === '应付账款' || a.name.startsWith('应付账款/') || NAMED_MANAGED.has(a.name);
               return (
                 <div className="brow" key={a.id}>
                   <div className="bhead">
