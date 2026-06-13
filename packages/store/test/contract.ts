@@ -127,6 +127,42 @@ export function runRepositoryContract(name: string, makeRepo: (now: Clock) => Re
       expect((await repo.listAccounts({ bookId: B1, includeArchived: true })).length).toBe(2);
       await expect(repo.updateAccount('nope', { name: 'x' })).rejects.toThrow();
     });
+
+    it('全局账户：跨账本可见 + 可被任意账本交易引用 + 可跨账本对账（账户全局化 Phase 1）', async () => {
+      const repo = makeRepo(fakeClock());
+      await repo.addBook(books[0]!); // B1 个人
+      await repo.addBook(books[1]!); // B2 生意
+      await repo.addAccount(accounts[0]!); // bank @B1（账本账户）
+      await repo.addAccount(accounts[6]!); // b2bank @B2（账本账户）
+      await repo.addAccount(accounts[8]!); // b2sales @B2 收入
+      // 全局支付宝（home=B1，global），两个账本都该看得到
+      await repo.addAccount({ id: 'ali', bookId: B1, name: '支付宝', type: 'asset', parentId: null, currency: 'CNY', global: true, archived: false });
+      expect((await repo.getAccount('ali'))!.global).toBe(true);
+      expect((await repo.listAccounts({ bookId: B1 })).map((a) => a.id).sort()).toEqual(['ali', 'bank']);
+      expect((await repo.listAccounts({ bookId: B2 })).map((a) => a.id).sort()).toEqual(['ali', 'b2bank', 'b2sales']);
+      // B2 交易引用全局支付宝（home 是 B1）→ 允许（借支付宝/贷营业收入）
+      await repo.addTransaction({
+        id: 't-g', bookId: B2, date: '2026-06-10', payee: '', note: '', tags: [],
+        postings: [
+          { id: 'pg1', txnId: 't-g', accountId: 'ali', amount: 10000, currency: 'CNY' },
+          { id: 'pg2', txnId: 't-g', accountId: 'b2sales', amount: -10000, currency: 'CNY' },
+        ],
+      });
+      expect(accountBalance(await repo.listTransactions(), 'ali')).toBe(10000);
+      // 账本账户跨账本仍被拒（b2bank 属 B2，B1 交易引用之）
+      await expect(
+        repo.addTransaction({
+          id: 't-x', bookId: B1, date: '2026-06-10', payee: '', note: '', tags: [],
+          postings: [
+            { id: 'px1', txnId: 't-x', accountId: 'bank', amount: -100, currency: 'CNY' },
+            { id: 'px2', txnId: 't-x', accountId: 'b2bank', amount: 100, currency: 'CNY' },
+          ],
+        }),
+      ).rejects.toThrow(/跨账本/);
+      // 全局账户可在任意账本下对账（rec.bookId=B2，账户 home=B1）
+      const r = await repo.addReconciliation({ id: 'rg', bookId: B2, accountId: 'ali', statementBalance: 10000, statementDate: '2026-06-10', completedAt: '2026-06-10T00:00:00Z' });
+      expect(r.accountId).toBe('ali');
+    });
   });
 
   describe(`${name} · 交易`, () => {

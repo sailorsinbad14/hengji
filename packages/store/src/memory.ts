@@ -115,7 +115,8 @@ export class InMemoryRepository implements Repository {
     for (const a of this.accounts.values()) {
       if (a.deleted) continue;
       if (!opts.includeArchived && a.archived) continue;
-      if (opts.bookId && a.bookId !== opts.bookId) continue;
+      // 全局账户对所有账本可见；其余仅本账本
+      if (opts.bookId && !a.global && a.bookId !== opts.bookId) continue;
       out.push(clone(a));
     }
     return out;
@@ -134,7 +135,8 @@ export class InMemoryRepository implements Repository {
     for (const p of txn.postings) {
       const acc = this.accounts.get(p.accountId);
       if (!acc || acc.deleted) throw new Error(`分录引用的账户不存在：${p.accountId}`);
-      if (acc.bookId !== txn.bookId) {
+      // 全局账户可被任何账本的交易引用；账本账户必须与交易同账本
+      if (!acc.global && acc.bookId !== txn.bookId) {
         throw new Error(`禁止跨账本分录：账户 ${acc.name} 属于其他账本`);
       }
     }
@@ -547,7 +549,8 @@ export class InMemoryRepository implements Repository {
     this.liveBook(rec.bookId);
     const acc = this.accounts.get(rec.accountId);
     if (!acc || acc.deleted) throw new Error(`对账账户不存在：${rec.accountId}`);
-    if (acc.bookId !== rec.bookId) throw new Error('对账账户必须与对账同账本');
+    // 全局账户跨账本对账；账本账户须与对账同账本
+    if (!acc.global && acc.bookId !== rec.bookId) throw new Error('对账账户必须与对账同账本');
     const ts = this.now();
     const stored: StoredReconciliation = { ...clone(rec), createdAt: ts, updatedAt: ts, deleted: false };
     this.reconciliations.set(rec.id, stored);

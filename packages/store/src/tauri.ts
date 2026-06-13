@@ -168,8 +168,8 @@ export class TauriSqlRepository implements Repository {
     }
     const ts = this.now();
     await this.db.execute(
-      `INSERT INTO accounts (id, book_id, name, type, parent_id, currency, archived, created_at, updated_at, deleted)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0)`,
+      `INSERT INTO accounts (id, book_id, name, type, parent_id, currency, global, archived, created_at, updated_at, deleted)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0)`,
       [
         account.id,
         account.bookId,
@@ -177,6 +177,7 @@ export class TauriSqlRepository implements Repository {
         account.type,
         account.parentId,
         account.currency,
+        account.global ? 1 : 0,
         account.archived ? 1 : 0,
         ts,
         ts,
@@ -196,7 +197,8 @@ export class TauriSqlRepository implements Repository {
     if (!opts.includeArchived) cond.push('archived = 0');
     if (opts.bookId) {
       params.push(opts.bookId);
-      cond.push(`book_id = $${params.length}`);
+      // 全局账户对所有账本可见；其余仅本账本
+      cond.push(`(global = 1 OR book_id = $${params.length})`);
     }
     const rows = await this.db.select<AccountRow[]>(`SELECT * FROM accounts WHERE ${cond.join(' AND ')}`, params);
     return rows.map(toAccount);
@@ -207,8 +209,8 @@ export class TauriSqlRepository implements Repository {
     if (!cur) throw new Error(`账户不存在：${id}`);
     const next: StoredAccount = { ...cur, ...patch, updatedAt: this.now() };
     await this.db.execute(
-      'UPDATE accounts SET name=$1, type=$2, parent_id=$3, currency=$4, archived=$5, updated_at=$6 WHERE id=$7',
-      [next.name, next.type, next.parentId, next.currency, next.archived ? 1 : 0, next.updatedAt, id],
+      'UPDATE accounts SET name=$1, type=$2, parent_id=$3, currency=$4, global=$5, archived=$6, updated_at=$7 WHERE id=$8',
+      [next.name, next.type, next.parentId, next.currency, next.global ? 1 : 0, next.archived ? 1 : 0, next.updatedAt, id],
     );
     return (await this.getAccount(id))!;
   }
@@ -217,15 +219,16 @@ export class TauriSqlRepository implements Repository {
   private async assertSameBook(txn: Transaction): Promise<void> {
     const ids = [...new Set(txn.postings.map((p) => p.accountId))];
     const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
-    const rows = await this.db.select<Array<{ id: string; book_id: string }>>(
-      `SELECT id, book_id FROM accounts WHERE id IN (${placeholders}) AND deleted = 0`,
+    const rows = await this.db.select<Array<{ id: string; book_id: string; global: number }>>(
+      `SELECT id, book_id, global FROM accounts WHERE id IN (${placeholders}) AND deleted = 0`,
       ids,
     );
-    const byId = new Map(rows.map((r) => [r.id, r.book_id] as const));
+    const byId = new Map(rows.map((r) => [r.id, r] as const));
     for (const id of ids) {
-      const bookId = byId.get(id);
-      if (bookId === undefined) throw new Error(`分录引用的账户不存在：${id}`);
-      if (bookId !== txn.bookId) throw new Error(`禁止跨账本分录：账户 ${id} 属于其他账本`);
+      const row = byId.get(id);
+      if (row === undefined) throw new Error(`分录引用的账户不存在：${id}`);
+      // 全局账户可被任何账本的交易引用；账本账户必须与交易同账本
+      if (row.global === 0 && row.book_id !== txn.bookId) throw new Error(`禁止跨账本分录：账户 ${id} 属于其他账本`);
     }
   }
 
@@ -890,12 +893,13 @@ export class TauriSqlRepository implements Repository {
       throw new Error(`对账记录已存在：${rec.id}`);
     }
     await this.assertBook(rec.bookId);
-    const acc = await this.db.select<Array<{ book_id: string }>>(
-      'SELECT book_id FROM accounts WHERE id = $1 AND deleted = 0',
+    const acc = await this.db.select<Array<{ book_id: string; global: number }>>(
+      'SELECT book_id, global FROM accounts WHERE id = $1 AND deleted = 0',
       [rec.accountId],
     );
     if (!acc[0]) throw new Error(`对账账户不存在：${rec.accountId}`);
-    if (acc[0].book_id !== rec.bookId) throw new Error('对账账户必须与对账同账本');
+    // 全局账户跨账本对账；账本账户须与对账同账本
+    if (acc[0].global === 0 && acc[0].book_id !== rec.bookId) throw new Error('对账账户必须与对账同账本');
     const ts = this.now();
     await this.db.execute(
       `INSERT INTO reconciliations (id, book_id, account_id, statement_balance, statement_date, completed_at, created_at, updated_at, deleted)

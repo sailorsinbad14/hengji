@@ -25,6 +25,7 @@ export type AccountType = 'asset' | 'liability' | 'equity' | 'income' | 'expense
 
 export interface Account {
   id: string;
+  /** 归属/创建账本；`global=true` 时仅作元数据（全局账户的余额归入全局资金池，不计入某账本净资产）。 */
   bookId: string;
   name: string;
   type: AccountType;
@@ -32,6 +33,11 @@ export interface Account {
   parentId: string | null;
   /** ISO 4217；MVP 单一本位币 'CNY' */
   currency: string;
+  /**
+   * 全局/共享账户（真金白银：现金/银行/支付宝…）：所有账本共用、记账下拉都可选、对账按账户跨账本。
+   * 缺省/false = 账本专属（损益科目、应收/应付/库存等虚拟账户恒专属）。
+   */
+  global?: boolean;
   archived: boolean;
 }
 

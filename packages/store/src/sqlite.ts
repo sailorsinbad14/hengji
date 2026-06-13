@@ -158,8 +158,8 @@ export class SqliteRepository implements Repository {
     const ts = this.now();
     this.db
       .prepare(
-        `INSERT INTO accounts (id, book_id, name, type, parent_id, currency, archived, created_at, updated_at, deleted)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+        `INSERT INTO accounts (id, book_id, name, type, parent_id, currency, global, archived, created_at, updated_at, deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       )
       .run(
         account.id,
@@ -168,6 +168,7 @@ export class SqliteRepository implements Repository {
         account.type,
         account.parentId,
         account.currency,
+        account.global ? 1 : 0,
         account.archived ? 1 : 0,
         ts,
         ts,
@@ -187,7 +188,8 @@ export class SqliteRepository implements Repository {
     const params: string[] = [];
     if (!opts.includeArchived) cond.push('archived = 0');
     if (opts.bookId) {
-      cond.push('book_id = ?');
+      // 全局账户对所有账本可见；其余仅本账本
+      cond.push('(global = 1 OR book_id = ?)');
       params.push(opts.bookId);
     }
     const rows = this.db
@@ -201,8 +203,8 @@ export class SqliteRepository implements Repository {
     if (!cur) throw new Error(`账户不存在：${id}`);
     const next: StoredAccount = { ...cur, ...patch, updatedAt: this.now() };
     this.db
-      .prepare(`UPDATE accounts SET name=?, type=?, parent_id=?, currency=?, archived=?, updated_at=? WHERE id=?`)
-      .run(next.name, next.type, next.parentId, next.currency, next.archived ? 1 : 0, next.updatedAt, id);
+      .prepare(`UPDATE accounts SET name=?, type=?, parent_id=?, currency=?, global=?, archived=?, updated_at=? WHERE id=?`)
+      .run(next.name, next.type, next.parentId, next.currency, next.global ? 1 : 0, next.archived ? 1 : 0, next.updatedAt, id);
     return (await this.getAccount(id))!;
   }
 
@@ -211,13 +213,14 @@ export class SqliteRepository implements Repository {
     const ids = [...new Set(txn.postings.map((p) => p.accountId))];
     const placeholders = ids.map(() => '?').join(', ');
     const rows = this.db
-      .prepare(`SELECT id, book_id FROM accounts WHERE id IN (${placeholders}) AND deleted = 0`)
-      .all(...ids) as unknown as Array<{ id: string; book_id: string }>;
-    const byId = new Map(rows.map((r) => [r.id, r.book_id] as const));
+      .prepare(`SELECT id, book_id, global FROM accounts WHERE id IN (${placeholders}) AND deleted = 0`)
+      .all(...ids) as unknown as Array<{ id: string; book_id: string; global: number }>;
+    const byId = new Map(rows.map((r) => [r.id, r] as const));
     for (const id of ids) {
-      const bookId = byId.get(id);
-      if (bookId === undefined) throw new Error(`分录引用的账户不存在：${id}`);
-      if (bookId !== txn.bookId) throw new Error(`禁止跨账本分录：账户 ${id} 属于其他账本`);
+      const row = byId.get(id);
+      if (row === undefined) throw new Error(`分录引用的账户不存在：${id}`);
+      // 全局账户可被任何账本的交易引用；账本账户必须与交易同账本
+      if (row.global === 0 && row.book_id !== txn.bookId) throw new Error(`禁止跨账本分录：账户 ${id} 属于其他账本`);
     }
   }
 
@@ -907,10 +910,11 @@ export class SqliteRepository implements Repository {
     }
     this.assertBook(rec.bookId);
     const acc = this.db
-      .prepare('SELECT book_id FROM accounts WHERE id = ? AND deleted = 0')
-      .get(rec.accountId) as { book_id: string } | undefined;
+      .prepare('SELECT book_id, global FROM accounts WHERE id = ? AND deleted = 0')
+      .get(rec.accountId) as { book_id: string; global: number } | undefined;
     if (!acc) throw new Error(`对账账户不存在：${rec.accountId}`);
-    if (acc.book_id !== rec.bookId) throw new Error('对账账户必须与对账同账本');
+    // 全局账户跨账本对账；账本账户须与对账同账本
+    if (acc.global === 0 && acc.book_id !== rec.bookId) throw new Error('对账账户必须与对账同账本');
     const ts = this.now();
     this.db
       .prepare(

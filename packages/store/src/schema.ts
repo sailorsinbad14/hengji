@@ -37,6 +37,7 @@ export interface AccountRow {
   type: string;
   parent_id: string | null;
   currency: string;
+  global: number;
   archived: number;
   created_at: string;
   updated_at: string;
@@ -229,6 +230,7 @@ export function toAccount(r: AccountRow): StoredAccount {
     type: r.type as Account['type'],
     parentId: r.parent_id,
     currency: r.currency,
+    global: r.global !== 0,
     archived: r.archived !== 0,
     createdAt: r.created_at,
     updatedAt: r.updated_at,

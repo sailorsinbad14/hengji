@@ -46,6 +46,7 @@ export interface AccountPatch {
   type?: Account['type'];
   parentId?: string | null;
   currency?: string;
+  global?: boolean;
   archived?: boolean;
 }
 
