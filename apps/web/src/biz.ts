@@ -421,7 +421,7 @@ const OPENING_EQUITY = '期初余额';
 const INVENTORY_LOSS_GAIN = '库存损溢';
 
 /** 找/建某顶层科目（按名+类型，CNY 本位容器），返回 id；已归档则恢复。 */
-async function ensureNamedAccount(repo: Repository, book: StoredBook, name: string, type: AccountType): Promise<string> {
+export async function ensureNamedAccount(repo: Repository, book: StoredBook, name: string, type: AccountType): Promise<string> {
   const accounts = await repo.listAccounts({ bookId: book.id, includeArchived: true });
   const found = accounts.find((a) => a.type === type && a.name === name && a.parentId === null);
   if (found) {

@@ -19,10 +19,11 @@ import Products from './views/Products';
 import Inventory from './views/Inventory';
 import Purchases from './views/Purchases';
 import FeeDefinitions from './views/FeeDefinitions';
+import Documents from './views/Documents';
 import Reconcile from './views/Reconcile';
 import Settings from './views/Settings';
 
-type View = 'dashboard' | 'txns' | 'budgets' | 'invest' | 'accounts' | 'reconcile' | 'customers' | 'suppliers' | 'orders' | 'products' | 'inventory' | 'purchases' | 'fees';
+type View = 'dashboard' | 'txns' | 'budgets' | 'invest' | 'accounts' | 'reconcile' | 'customers' | 'suppliers' | 'orders' | 'products' | 'inventory' | 'purchases' | 'fees' | 'documents';
 /** 顶层导航：财务总表 / 全局设置 / 某账本 id。 */
 const OVERVIEW = 'all';
 const SETTINGS = '__settings__';
@@ -64,6 +65,7 @@ const TABS: Record<BookType, Array<[View, string]>> = {
     ['inventory', '库存'],
     ['purchases', '采购'],
     ['fees', '费用'],
+    ['documents', '单据'],
     ['txns', '流水'],
     ['budgets', '预算'],
     ['accounts', '账户'],
@@ -413,6 +415,7 @@ export default function App() {
             {view === 'inventory' && <Inventory data={data} />}
             {view === 'purchases' && <Purchases data={data} />}
             {view === 'fees' && <FeeDefinitions data={data} />}
+            {view === 'documents' && <Documents data={data} />}
           </>
         )}
       </main>
