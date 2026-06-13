@@ -394,6 +394,7 @@ const INVENTORY = '库存商品';
 const COGS = '营业成本';
 const DROPSHIP_WIP = '代采在途成本';
 const OPENING_EQUITY = '期初余额';
+const INVENTORY_LOSS_GAIN = '库存损溢';
 
 /** 找/建某顶层科目（按名+类型，CNY 本位容器），返回 id；已归档则恢复。 */
 async function ensureNamedAccount(repo: Repository, book: StoredBook, name: string, type: AccountType): Promise<string> {
@@ -425,6 +426,69 @@ export function ensureDropshipAccount(repo: Repository, book: StoredBook): Promi
 /** 找/建「期初余额」权益科目（CNY，期初库存的对方科目）。 */
 export function ensureOpeningEquityAccount(repo: Repository, book: StoredBook): Promise<string> {
   return ensureNamedAccount(repo, book, OPENING_EQUITY, 'equity');
+}
+
+/** 找/建「库存损溢」收入科目（CNY，盘点调整的对方科目，双向：盘盈贷增/盘亏借减，同对账盘盈盘亏模式）。 */
+export function ensureInventoryLossGainAccount(repo: Repository, book: StoredBook): Promise<string> {
+  return ensureNamedAccount(repo, book, INVENTORY_LOSS_GAIN, 'income');
+}
+
+/**
+ * 盘点 / 库存调整（C2 模型重构 Step 2）：把某商品在手数调到实际盘点数 `targetQty`，差额计「库存损溢」。
+ * - 盘亏（target<在手）：按当前均价结转——借库存损溢 / 贷库存商品（asset 减）+ adjust 流水(qty<0, unitCost=均价)。
+ * - 盘盈（target>在手）：按 `gainUnitCost ?? 当前均价` 入账——借库存商品 / 贷库存损溢 + adjust 流水(qty>0)。
+ *   均价为 0（空库存）且未给单价 → 价值 0，只记数量流水、不记账。
+ * 原因必填、记入流水与分录备注。不改 core：adjust 是合法 movement 类型，inventoryState 按 qty 正负回放。
+ */
+export async function recordStockAdjust(
+  repo: Repository,
+  book: StoredBook,
+  opts: { productId: string; targetQty: number; reason: string; date: string; gainUnitCost?: number },
+): Promise<void> {
+  const reason = opts.reason.trim();
+  if (!reason) throw new Error('请填写盘点 / 调整原因');
+  if (!Number.isFinite(opts.targetQty) || opts.targetQty < 0) throw new Error('实际数量需为非负数');
+  const movements = await repo.listInventoryMovements({ bookId: book.id, productId: opts.productId });
+  const st = inventoryState(movements);
+  const delta = opts.targetQty - st.qty;
+  if (delta === 0) throw new Error('盘点数量与在手一致，无需调整');
+  // 盘亏按当前均价结转；盘盈按给定单价或当前均价（空库存均价 0 时建议填单价，否则价值为 0）
+  const unitCost = delta < 0 ? st.avgCost : (opts.gainUnitCost ?? st.avgCost);
+  const value = Math.round(Math.abs(delta) * unitCost);
+  let txnId: string | null = null;
+  if (value > 0) {
+    const invId = await ensureInventoryAccount(repo, book);
+    const lgId = await ensureInventoryLossGainAccount(repo, book);
+    const entry = expandEntry(
+      {
+        // 盘盈：借库存商品 / 贷库存损溢（income）；盘亏：借库存损溢 / 贷库存商品
+        kind: delta > 0 ? 'income' : 'expense',
+        bookId: book.id,
+        date: opts.date,
+        amount: value,
+        currency: 'CNY',
+        accountId: invId,
+        categoryId: lgId,
+        payee: '库存盘点',
+        note: reason,
+      },
+      genId,
+    );
+    await repo.addTransaction(entry);
+    txnId = entry.id;
+  }
+  await repo.addInventoryMovement({
+    id: genId(),
+    bookId: book.id,
+    productId: opts.productId,
+    date: opts.date,
+    kind: 'adjust',
+    qty: delta,
+    unitCost,
+    orderId: null,
+    txnId,
+    note: reason,
+  });
 }
 
 /**

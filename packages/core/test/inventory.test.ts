@@ -4,7 +4,7 @@ import type { InventoryMovement, IssuePlanLine } from '../src/index';
 
 const B = 'b1';
 let n = 0;
-const mv = (date: string, qty: number, unitCost: number, kind: 'in' | 'out' = qty >= 0 ? 'in' : 'out'): InventoryMovement => ({
+const mv = (date: string, qty: number, unitCost: number, kind: 'in' | 'out' | 'adjust' = qty >= 0 ? 'in' : 'out'): InventoryMovement => ({
   id: `m${String(++n).padStart(3, '0')}`,
   bookId: B,
   productId: 'p1',
@@ -65,6 +65,15 @@ describe('inventory 移动加权均价', () => {
     const ordered = [mv('2026-06-01', 10, 8000), mv('2026-06-02', 10, 10000)];
     const shuffled = [ordered[1]!, ordered[0]!];
     expect(inventoryState(shuffled)).toEqual(inventoryState(ordered));
+  });
+
+  it('盘点 adjust 按 qty 正负回放：盘亏减、盘盈增（Step 2 不改 core）', () => {
+    // 进 10 @ ¥80（均价 80）；盘亏 −3 @ 80 → 7 个、值 ¥560、均价不变
+    const loss = inventoryState([mv('2026-06-01', 10, 8000), mv('2026-06-02', -3, 8000, 'adjust')]);
+    expect(loss).toEqual({ qty: 7, totalCost: 56000, avgCost: 8000 });
+    // 盘盈 +5 @ 80 → 15 个、值 ¥1200、均价不变
+    const gain = inventoryState([mv('2026-06-01', 10, 8000), mv('2026-06-03', 5, 8000, 'adjust')]);
+    expect(gain).toEqual({ qty: 15, totalCost: 120000, avgCost: 8000 });
   });
 });
 

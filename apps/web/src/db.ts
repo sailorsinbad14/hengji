@@ -174,6 +174,16 @@ async function bootstrapDemo(): Promise<Repository> {
   );
   await repo.addTransaction(apBuy);
   await repo.addInventoryMovement({ id: genId(), bookId: biz.book.id, productId: prodB, date: daysAgo(10), kind: 'in', qty: 30, unitCost: toMinor(18), orderId: null, txnId: apBuy.id, note: '赊购' });
+  // 盘点调整（C2 模型重构 Step 2）——展示「库存损溢」：B型配件盘点损耗 2 个，按均价 ¥19.25 计入库存损溢（借库存损溢/贷库存商品）。
+  const lossGainId = genId();
+  await repo.addAccount({ id: lossGainId, bookId: biz.book.id, name: '库存损溢', type: 'income', parentId: null, currency: 'CNY', archived: false });
+  const adjAvg = currentAvgCost(await repo.listInventoryMovements({ bookId: biz.book.id, productId: prodB }));
+  const adjEntry = expandEntry(
+    { kind: 'expense', bookId: biz.book.id, date: daysAgo(6), amount: Math.round(2 * adjAvg), currency: 'CNY', accountId: invAcctId, categoryId: lossGainId, payee: '库存盘点', note: '盘点损耗' },
+    genId,
+  );
+  await repo.addTransaction(adjEntry);
+  await repo.addInventoryMovement({ id: genId(), bookId: biz.book.id, productId: prodB, date: daysAgo(6), kind: 'adjust', qty: -2, unitCost: adjAvg, orderId: null, txnId: adjEntry.id, note: '盘点损耗' });
   // 一笔逾期应付——展示「应付账龄分桶 + 应付到期提醒」：包装供应商账期7天，40天前赊购包材未付 → 逾期、落 31–60 桶。
   const sup2Id = genId();
   await repo.addSupplier({ id: sup2Id, bookId: biz.book.id, name: '包装供应商', phone: '', note: '', dueDays: 7, archived: false });

@@ -3,7 +3,7 @@ import { fromMinor, inventoryState, toMinor } from '@app/core';
 import type { StoredInventoryMovement, StoredProduct, StoredSupplier } from '@app/store';
 import type { AppData } from '../App';
 import { fmtMoney, todayISO } from '../format';
-import { recordCreditStockIn, recordStockIn } from '../biz';
+import { recordCreditStockIn, recordStockAdjust, recordStockIn } from '../biz';
 
 export default function Inventory({ data }: { data: AppData }) {
   const { repo, book, accounts, reload } = data;
@@ -19,6 +19,13 @@ export default function Inventory({ data }: { data: AppData }) {
   const [date, setDate] = useState(todayISO());
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // 盘点 / 库存调整（按商品内联）
+  const [adjustFor, setAdjustFor] = useState<string | null>(null);
+  const [aTarget, setATarget] = useState('');
+  const [aReason, setAReason] = useState('');
+  const [aDate, setADate] = useState(todayISO());
+  const [aGainCost, setAGainCost] = useState('');
 
   async function refresh(): Promise<void> {
     const [ps, ms, ss] = await Promise.all([
@@ -100,6 +107,48 @@ export default function Inventory({ data }: { data: AppData }) {
     }
   }
 
+  function openAdjust(p: StoredProduct, currentQty: number): void {
+    setErr(null);
+    setAdjustFor(p.id);
+    setATarget(String(currentQty));
+    setAReason('');
+    setADate(todayISO());
+    setAGainCost('');
+  }
+
+  async function doAdjust(p: StoredProduct): Promise<void> {
+    setErr(null);
+    const target = Number(aTarget);
+    if (!Number.isFinite(target) || target < 0) {
+      setErr('请输入有效的实际数量');
+      return;
+    }
+    if (!aReason.trim()) {
+      setErr('请填写盘点 / 调整原因');
+      return;
+    }
+    let gain: number | undefined;
+    if (aGainCost.trim() !== '') {
+      const g = Number(aGainCost);
+      if (!Number.isFinite(g) || g < 0) {
+        setErr('盘盈入账单价需为非负数');
+        return;
+      }
+      gain = toMinor(g);
+    }
+    setSaving(true);
+    try {
+      await recordStockAdjust(repo, book, { productId: p.id, targetQty: target, reason: aReason.trim(), date: aDate, gainUnitCost: gain });
+      setAdjustFor(null);
+      await refresh();
+      await reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <>
       <div className="main-head">
@@ -122,7 +171,47 @@ export default function Inventory({ data }: { data: AppData }) {
                   在手 {st.qty}
                   {p.unit ? ` ${p.unit}` : ''} <span className="muted">· 均价 {fmtMoney(st.avgCost)} · 值 {fmtMoney(st.totalCost)}</span>
                 </span>
+                <div className="arow-btns">
+                  <button className="lnk" onClick={() => openAdjust(p, st.qty)}>
+                    盘点 / 调整
+                  </button>
+                </div>
               </div>
+              {adjustFor === p.id && (
+                <div className="collect">
+                  <p className="muted small" style={{ marginTop: 0 }}>
+                    把在手数调到实际盘点数；差额按当前均价 {fmtMoney(st.avgCost)} 计入「库存损溢」。盘盈可填入账单价。
+                  </p>
+                  <div className="qgrid">
+                    <label>
+                      实际数量
+                      <input inputMode="decimal" value={aTarget} onChange={(e) => setATarget(e.target.value)} placeholder={String(st.qty)} />
+                    </label>
+                    <label>
+                      原因（必填）
+                      <input value={aReason} onChange={(e) => setAReason(e.target.value)} placeholder="盘点对差 / 报废 / 损耗" />
+                    </label>
+                    <label>
+                      日期
+                      <input type="date" value={aDate} onChange={(e) => setADate(e.target.value)} />
+                    </label>
+                    {Number(aTarget) > st.qty && (
+                      <label>
+                        盘盈入账单价（元，留空取均价）
+                        <input inputMode="decimal" value={aGainCost} onChange={(e) => setAGainCost(e.target.value)} placeholder={String(fromMinor(st.avgCost))} />
+                      </label>
+                    )}
+                  </div>
+                  <div className="ord-foot">
+                    <button className="lnk" onClick={() => setAdjustFor(null)}>
+                      取消
+                    </button>
+                    <button className="btn btn-primary" onClick={() => void doAdjust(p)} disabled={saving}>
+                      确认调整
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ))
         )}

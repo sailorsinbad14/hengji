@@ -59,7 +59,8 @@
   - store：M12 `products.quote_only`（旧 is_stock/dropship 留死列、不读不 DROP）；采购单**草稿态**复用既有 nullable `txn_id`（=草稿）+ 空 `supplier_id`，新增 `updatePurchase`（确认补供应商/采购价/记账 id）+ `removePurchase`（作废草稿）。
   - biz/web：开单 `saveOrder` 按当前库存算缺口——不足则订单「待采购」+ 自动生成草稿采购单（行=各缺口商品×缺口数，单价预填进价）；`confirmOrderPurchase` 补供应商+采购价记账→「待发货」；`voidDraftPurchase`（库存已够时作废草稿，折中 A2）；`completeOrder` 重写用 `planInventoryIssue` 拆行结转 COGS（库存 out 走均价 + 采购走代采在途）。Products 加「纯报价」勾选 + 「期初库存」(落 in 流水、对方科目期初余额，A4)。
   - **简化/边界**：一单一张草稿采购单（多缺口商品同一供应商）；确认后的采购单作废需手动反向（仅草稿可一键作废）；代采在途 holding 单账户共用（各单净额）。
-- **Step 2 盘点调整 / Step 3 采购页（orderId 可空+去向 kind，M13）/ Step 4 额外费用+公式引擎**：待后续 session（见 followups）。
+- **Step 2 · 盘点 / 库存调整 ✅ 已落地**：biz `recordStockAdjust`（把在手调到实际盘点数 `targetQty`，差额计「库存损溢」income 科目——盘亏借库存损溢/贷库存商品按当前均价、盘盈借库存商品/贷库存损溢按给定单价 or 均价；均价 0 且未给单价则只记数量 adjust 流水、不记账）；core `adjust` 早是合法 movement、`inventoryState` 按 qty 正负回放，**不改 core**（+1 回归单测）。web 库存页每商品「盘点/调整」内联表单（实际数量 + 必填原因 + 日期 + 盘盈时显单价）。demo 加 B型配件盘亏 2 示例。**简化**：盘盈默认取均价（空库存需填单价）；「库存损溢」按需自建、与既有自动科目一样未加 managed 保护（统一硬化另议）。
+- **Step 3 采购页（orderId 可空+去向 kind，M13）/ Step 4 额外费用+公式引擎**：待后续 session（见 followups）。
 
 ## 多币种（个人追踪派，2026-06 评审通过；✅ Phase 1 已落地）
 
