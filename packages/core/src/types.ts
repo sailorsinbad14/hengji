@@ -126,6 +126,8 @@ export interface OrderLine {
   unitPrice: Minor;
   /** 关联的商品主数据 id；自由文本行为 null（C1 期） */
   productId: string | null;
+  /** 本行应用的额外费用定义 id 列表（C2 Step 4）；缺省/空 = 无额外费用 */
+  feeIds?: string[];
 }
 
 /**
@@ -162,6 +164,36 @@ export interface Order {
   /** 已完成时生成的收入确认分录 id；未完成为 null */
   revenueTxnId: string | null;
   lines: OrderLine[];
+}
+
+/**
+ * 额外费用计算方式（C2 Step 4，flagship 公式引擎）：
+ * - `percent`：百分比——按适用商品行金额 × 档位百分数（如佣金 5%）。
+ * - `fixed`：固定金额——一次性收取档位金额（如运费 ¥10/单）。
+ * - `perQty`：按数量——适用商品行数量合计 × 档位单位额（如包装费 ¥2/件）。
+ */
+export type FeeCalcType = 'percent' | 'fixed' | 'perQty';
+
+/** 声明式阶梯一档：分组合计达到 threshold（含）起适用本档 value。最低档 threshold=0。 */
+export interface FeeTier {
+  /** 阶梯阈值（最小单位/分；perQty 下按数量阈值）；无阶梯则单档 threshold=0 */
+  threshold: number;
+  /** percent: 百分数(5=5%)；fixed: 固定额(分)；perQty: 每单位额(分) */
+  value: number;
+}
+
+/**
+ * 额外费用定义（C2 Step 4）：账本级可复用，开单时在商品行上勾选应用。
+ * 声明式阶梯档位表——LLM 自然语言生成公式的目标格式（后置：LLM 只翻译成此结构，算账由 `computeFees` 确定性执行）。
+ */
+export interface FeeDefinition {
+  id: string;
+  bookId: string;
+  name: string;
+  calcType: FeeCalcType;
+  /** 阶梯档位（按 threshold 升序，至少一档；含 threshold=0 基础档）。分组合计落在哪档用哪档 value。 */
+  tiers: FeeTier[];
+  archived: boolean;
 }
 
 /** in = 收款（来自客户）；out = 付款（给供应商，C 期）。 */
