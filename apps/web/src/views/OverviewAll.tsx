@@ -29,16 +29,21 @@ export default function OverviewAll({
   const va = accounts.filter((x) => visible.has(x.bookId));
   const vt = txns.filter((x) => visible.has(x.bookId));
   const display = convert.display;
-  const totalNw = netWorth(vt, va, convert); // 折合到展示币种
+  const totalNw = netWorth(vt, va, convert); // 全部净资产（折合展示币种）= 全局资金 + Σ各账本专属净额
   // 净资产按币种分组（原币精确）——多于一种币种时展示分组小计
   const byCur = [...balancesByCurrency(vt, va).entries()].filter(([, v]) => v !== 0);
   const converted = byCur.some(([c]) => c !== display); // 持有非展示币种 → 标头标注折合
   const multiCurrency = byCur.length > 1; // 多于一种币种 → 列各币种原币小计
+  // 全局资金（真金白银，全账本共享）——按 a.global 区分、单列一次，不计入某账本，杜绝重复计
+  const globalAccts = va.filter((a) => a.global);
+  const funds = netWorth(vt, globalAccts, convert);
+  const hasGlobal = globalAccts.length > 0;
 
   // 全局记账口径（对所有账本一致），各账本算收支再求和——与各账本 Dashboard 数字一致。
+  // 各账本卡的「净额」只算本账本专属（非全局）账户，全局资金单列上方。
   const basis = basisOf(settings);
   const perBook = books.map((b) => {
-    const a = accounts.filter((x) => x.bookId === b.id);
+    const a = accounts.filter((x) => x.bookId === b.id && !x.global);
     const t = txns.filter((x) => x.bookId === b.id);
     const arIds = basis === 'cash' ? receivableAccountIds(a) : undefined;
     const ie = incomeExpense(t, a, { period, basis, receivableAccountIds: arIds, convert });
@@ -69,6 +74,12 @@ export default function OverviewAll({
             </div>
           )}
         </div>
+        {hasGlobal && (
+          <div className="stat">
+            <div className="k">全局资金<span className="muted"> · 全账本共享</span></div>
+            <div className="v sm">{fmtMoney(funds, display)}</div>
+          </div>
+        )}
         <div className="stat">
           <div className="k">本月总收入</div>
           <div className="v sm pos">{fmtMoney(totalIe.income, display)}</div>
@@ -91,13 +102,15 @@ export default function OverviewAll({
             </div>
             <div className="bc-nw">{fmtMoney(nw, display)}</div>
             <div className="bc-sub">
-              本月{book.type === 'business' ? '利润' : '结余'} {ie.net >= 0 ? '+' : ''}
+              {book.type === 'business' ? '经营净额' : '专属净额'} · 本月{book.type === 'business' ? '利润' : '结余'} {ie.net >= 0 ? '+' : ''}
               {fmtMoney(ie.net, display)} · {txCount} 笔
             </div>
           </button>
         ))}
       </div>
-      <p className="muted small">汇总 = 各账本净资产之和（引擎按复式分录聚合）；点击卡片或左侧列表进入账本。</p>
+      <p className="muted small">
+        全部净资产 = {hasGlobal ? '全局资金（共享）+ ' : ''}各账本专属净额之和；账本卡只算本账本专属账户，公用资金（支付宝/银行卡等）归全局。点击卡片进入账本。
+      </p>
     </>
   );
 }

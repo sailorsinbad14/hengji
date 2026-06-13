@@ -30,9 +30,12 @@ export interface AppData {
   repo: Repository;
   /** 当前账本（已选定时） */
   book: StoredBook;
-  /** 当前账本作用域内的数据 */
+  /** 当前账本可见账户：本账本专属 + 全部全局账户（记账下拉/账户页用） */
   accounts: StoredAccount[];
+  /** 本账本交易（损益/最近交易/账本专属账户余额用） */
   txns: StoredTransaction[];
+  /** 全部账本交易（全局账户余额跨账本聚合用——全局账户的流水散落多账本） */
+  allTxns: StoredTransaction[];
   budgets: StoredBudget[];
   /** 全局记账口径（对所有账本生效） */
   basis: AccountingBasis;
@@ -126,7 +129,8 @@ export default function App() {
   const curBook = useMemo(() => books.find((b) => b.id === cur) ?? null, [books, cur]);
   const scoped = useMemo(
     () => ({
-      accounts: accounts.filter((a) => a.bookId === cur),
+      // 全局账户对所有账本可见；本账本专属账户按 bookId
+      accounts: accounts.filter((a) => a.global || a.bookId === cur),
       txns: txns.filter((t) => t.bookId === cur),
       budgets: budgets.filter((b) => b.bookId === cur),
     }),
@@ -147,7 +151,7 @@ export default function App() {
     const day = reconcileDayOf(settings);
     if (!day || !reconcileWindowOpen(new Date(), day, reconcileLeadOf(settings))) return null;
     const hasPending = scoped.accounts
-      .filter((a) => a.type === 'asset' || a.type === 'liability')
+      .filter((a) => (a.type === 'asset' || a.type === 'liability') && !a.global) // 全局账户对账在全局入口（Phase 4）
       .some((a) => unclearedCount(scoped.txns, a.id) > 0);
     return hasPending ? reconcileTargetDate(new Date(), day) : null;
   }, [curBook, settings, scoped.accounts, scoped.txns]);
@@ -225,7 +229,7 @@ export default function App() {
   }
 
   const data: AppData | null = curBook
-    ? { repo, book: curBook, ...scoped, basis, convert, mcEnabled, reload: () => loadFrom(repo) }
+    ? { repo, book: curBook, ...scoped, allTxns: txns, basis, convert, mcEnabled, reload: () => loadFrom(repo) }
     : null;
   const tabs = curBook ? TABS[curBook.type] : [];
   const showReminder = reconReminder && curBook && !reconDismissed.has(curBook.id);
@@ -285,10 +289,14 @@ export default function App() {
             {scoped.accounts
               .filter((a) => a.type === 'asset' || a.type === 'liability')
               .map((a) => {
-                const bal = accountBalance(scoped.txns, a.id);
+                // 全局账户余额跨账本聚合（流水散落多账本）→ 用全量 txns；账本专属账户仅本账本流水触及，结果一致
+                const bal = accountBalance(txns, a.id);
                 return (
                   <div className="acct" key={a.id}>
-                    <span className="nm">{a.name}</span>
+                    <span className="nm">
+                      {a.name}
+                      {a.global && <span className="chip"> 全局</span>}
+                    </span>
                     <span className={`bal${bal < 0 ? ' neg' : ''}`}>{fmtMoney(bal, a.currency)}</span>
                   </div>
                 );

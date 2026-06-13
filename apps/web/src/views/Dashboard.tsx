@@ -49,29 +49,35 @@ function Donut({ slices, total, display }: { slices: Array<{ name: string; value
 }
 
 export default function Dashboard({ data }: { data: AppData }) {
-  const { accounts, txns, book, basis, convert } = data;
+  const { accounts, txns, allTxns, book, basis, convert } = data;
   const month = currentMonth();
   const period = { from: `${month}-01`, to: `${month}-31` };
-  const nw = netWorth(txns, accounts, convert);
+  // 账户全局化：本账本净额 = 专属（非全局）资产−负债；可用资金 = 全局共享账户（余额散落多账本→用全量 txns）。
+  const bookScoped = accounts.filter((a) => !a.global);
+  const globalAccts = accounts.filter((a) => a.global);
+  const bookNw = netWorth(allTxns, bookScoped, convert);
+  const funds = netWorth(allTxns, globalAccts, convert);
+  const hasGlobal = globalAccts.length > 0;
   const arIds = basis === 'cash' ? receivableAccountIds(accounts) : undefined;
   const ie = incomeExpense(txns, accounts, { period, basis, receivableAccountIds: arIds, convert });
-  // 资产饼图：各资产账户余额折合到展示币种(CNY)再比例分布（多币种下原币不可直接相加）
-  const slices = accounts
+  // 资产饼图：本账本专属资产（全局资金单列「可用资金」，不混入），折合展示币种比例分布
+  const slices = bookScoped
     .filter((a) => a.type === 'asset')
-    .map((a) => ({ name: a.name, value: convertAmount(accountBalance(txns, a.id), a.currency, convert) }))
+    .map((a) => ({ name: a.name, value: convertAmount(accountBalance(allTxns, a.id), a.currency, convert) }))
     .filter((s) => s.value > 0);
   const totalAssets = slices.reduce((s, x) => s + x.value, 0);
   const netLabel = book.type === 'business' ? '本月利润' : '本月结余';
+  const nwLabel = book.type === 'business' ? '经营净额' : '本账本净额';
   const recv = book.type === 'business' ? receivableSummary(accounts, txns, convert) : null;
-  // 多币种：账户跨币种时，净资产标头标注「折合<展示币种>」+ 各币种小计
+  // 多币种：本账本专属账户跨币种时，标头标注「折合<展示币种>」+ 各币种小计
   const display = convert.display;
-  const byCur = [...balancesByCurrency(txns, accounts).entries()].filter(([, v]) => v !== 0);
+  const byCur = [...balancesByCurrency(allTxns, bookScoped).entries()].filter(([, v]) => v !== 0);
   const converted = byCur.some(([c]) => c !== display); // 持有非展示币种 → 标头需标注折合
   const multiCurrency = byCur.length > 1; // 多于一种币种 → 列各币种原币小计
 
-  // 滚动对账状态：仅对「已开始对账」的账本显示（有任一已核销分录），免扰不对账的用户。
+  // 滚动对账状态：仅对本账本专属账户（全局账户对账在全局入口）。
   const hasReconciled = txns.some((t) => t.postings.some((p) => p.cleared));
-  const pendingAccts = accounts
+  const pendingAccts = bookScoped
     .filter((a) => a.type === 'asset' || a.type === 'liability')
     .filter((a) => unclearedCount(txns, a.id) > 0).length;
 
@@ -91,8 +97,8 @@ export default function Dashboard({ data }: { data: AppData }) {
       </div>
       <div className="stats">
         <div className="stat hero-stat">
-          <div className="k">净资产{converted ? `（折合${currencyDef(display).name}）` : ''}</div>
-          <div className="v">{fmtMoney(nw, display)}</div>
+          <div className="k">{nwLabel}{converted ? `（折合${currencyDef(display).name}）` : ''}</div>
+          <div className="v">{fmtMoney(bookNw, display)}</div>
           {multiCurrency && (
             <div className="cur-breakdown">
               {byCur.map(([cur, amt]) => (
@@ -103,6 +109,12 @@ export default function Dashboard({ data }: { data: AppData }) {
             </div>
           )}
         </div>
+        {hasGlobal && (
+          <div className="stat">
+            <div className="k">可用资金<span className="muted"> · 全局共享</span></div>
+            <div className="v sm">{fmtMoney(funds, display)}</div>
+          </div>
+        )}
         <div className="stat">
           <div className="k">本月收入</div>
           <div className="v sm pos">{fmtMoney(ie.income, display)}</div>

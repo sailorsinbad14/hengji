@@ -121,6 +121,9 @@ async function bootstrapDemo(): Promise<Repository> {
     ),
   );
 
+  // 账户全局化演示：把「支付宝」设为全局共享——生意和生活混用同一个真实支付宝（小老板典型痛点）。
+  await repo.updateAccount(me.byName('支付宝'), { global: true });
+
   // —— 妻子的账本（个人 #2，演示同类型多账本）
   const wife = await createBookWithChart(repo, '妻子的账本', 'personal');
   await opening(wife.book.id, wife.byName, '银行卡', 8000);
@@ -141,6 +144,13 @@ async function bootstrapDemo(): Promise<Repository> {
     { kind: 'expense', bookId: biz.book.id, date: daysAgo(2), amount: toMinor(120), accountId: biz.byName('对公账户'), categoryId: biz.byName('运费杂费'), payee: '快递费' },
   ];
   for (const e of bizEntries) await repo.addTransaction(expandEntry(e, genId));
+  // 账户全局化演示：老板用「个人支付宝」(全局共享) 付了一笔生意快递费——生意账本的交易落在共享账户上。
+  await repo.addTransaction(
+    expandEntry(
+      { kind: 'expense', bookId: biz.book.id, date: daysAgo(3), amount: toMinor(50), currency: 'CNY', accountId: me.byName('支付宝'), categoryId: biz.byName('运费杂费'), payee: '快递', note: '用个人支付宝付' },
+      genId,
+    ),
+  );
   const prodA = genId();
   const prodB = genId();
   await repo.addProduct({ id: prodA, bookId: biz.book.id, name: 'A型工具', costPrice: toMinor(80), salePrice: toMinor(125), quoteOnly: false, unit: '个', archived: false });
