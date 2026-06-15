@@ -34,7 +34,8 @@ function parseTiers(calc: FeeCalcType, drafts: TierDraft[]): FeeTier[] | null {
   for (const d of drafts) {
     const thNum = Number(d.threshold.trim() === '' ? '0' : d.threshold);
     const vNum = Number(d.value);
-    if (!Number.isFinite(thNum) || thNum < 0 || !Number.isFinite(vNum) || vNum < 0) return null;
+    // 阈值（分组合计）须非负；数值允许为负——满减/折扣等优惠（如满 300 减 20 = 固定额 −20）。
+    if (!Number.isFinite(thNum) || thNum < 0 || !Number.isFinite(vNum)) return null;
     const threshold = calc === 'perQty' ? thNum : toMinor(thNum);
     const value = calc === 'percent' ? vNum : toMinor(vNum);
     out.push({ threshold, value });
@@ -92,7 +93,7 @@ export default function FeeDefinitions({ data }: { data: AppData }) {
     }
     const parsed = parseTiers(calc, tiers);
     if (!parsed || parsed.length === 0) {
-      setErr('档位需为非负数');
+      setErr('阈值需为非负数（数值可为负，如满减优惠）');
       return;
     }
     if (parsed[0]!.threshold !== 0) {
