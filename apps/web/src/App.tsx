@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { accountBalance, convertAmount, outstandingCharges, unclearedCount } from '@app/core';
 import type { AccountingBasis, BookType, ConvertCtx } from '@app/core';
 import type { Repository, StoredAccount, StoredBook, StoredBudget, StoredCustomer, StoredFeeDefinition, StoredOrder, StoredSetting, StoredSettlement, StoredSupplier, StoredTransaction } from '@app/store';
-import { BOOK_META, createBookWithChart, isDesktop, ready } from './db';
+import { BOOK_META, createBookWithChart, demoRepoOnce, isDesktop, openDesktopRepoOnce, resetDesktopRepo } from './db';
 import { daysBetween, fmtMoney, setCurrencyRegistry, todayISO } from './format';
 import { customerOrderStatus, payableLedger } from './biz';
-import { advancedOn, basisOf, convertCtxOf, currenciesOf, dueLeadOf, multiCurrencyOn, reconcileDayOf, reconcileLeadOf, reconcileTargetDate, reconcileWindowOpen } from './settings';
+import { advancedOn, autoLockMinOf, basisOf, convertCtxOf, currenciesOf, dueLeadOf, multiCurrencyOn, reconcileDayOf, reconcileLeadOf, reconcileTargetDate, reconcileWindowOpen } from './settings';
+import { lock as lockDb, securityStatus } from '@app/store/crypto';
+import UnlockScreen from './components/UnlockScreen';
 import OverviewAll from './views/OverviewAll';
 import Dashboard from './views/Dashboard';
 import Transactions from './views/Transactions';
@@ -104,6 +106,9 @@ export default function App() {
   const [reconDismissed, setReconDismissed] = useState<Set<string>>(new Set());
   const [dueDismissed, setDueDismissed] = useState<Set<string>>(new Set());
   const [apDueDismissed, setApDueDismissed] = useState<Set<string>>(new Set());
+  // 启动门（桌面加密）：'loading' 探测中 / 'locked' 显解锁屏 / 'open' 已开库。浏览器演示恒 'open'。
+  const [gate, setGate] = useState<'loading' | 'locked' | 'open'>('loading');
+  const [encrypted, setEncrypted] = useState(false);
 
   async function loadFrom(r: Repository): Promise<void> {
     const [bk, a, t, b, s, os, cs, st, sup, fd] = await Promise.all([
@@ -131,12 +136,82 @@ export default function App() {
     setFeeDefs(fd);
   }
 
+  // 启动门：浏览器→直接开演示库；桌面→先查加密状态，未加密直接开，已加密则渲染解锁屏（开库前）。
   useEffect(() => {
-    void ready.then(async (r) => {
+    let cancelled = false;
+    void (async () => {
+      if (!isDesktop) {
+        const r = await demoRepoOnce();
+        if (cancelled) return;
+        await loadFrom(r);
+        setRepo(r);
+        setGate('open');
+        return;
+      }
+      const st = await securityStatus();
+      if (cancelled) return;
+      setEncrypted(st.encrypted);
+      if (st.encrypted) {
+        setGate('locked'); // 显解锁屏，待 unlock 成功再开库（见 openAfterUnlock）
+        return;
+      }
+      const r = await openDesktopRepoOnce(false);
+      if (cancelled) return;
       await loadFrom(r);
       setRepo(r);
-    });
+      setGate('open');
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  // 解锁成功（DEK 已在 Rust 侧）后开密文库进入主界面。
+  async function openAfterUnlock(): Promise<void> {
+    const r = await openDesktopRepoOnce(true);
+    await loadFrom(r);
+    setRepo(r);
+    setGate('open');
+  }
+
+  // 设/移除密码后刷新加密态（驱动自动锁开关 + 状态显示）。
+  function refreshSecurity(): void {
+    void securityStatus().then((s) => setEncrypted(s.encrypted));
+  }
+
+  // 自动锁（仅桌面已加密且开启时）：无操作达时长 → 锁定（清 DEK + 关库）→ 回解锁屏。
+  useEffect(() => {
+    if (gate !== 'open' || !encrypted) return;
+    const mins = autoLockMinOf(settings);
+    if (mins <= 0) return;
+    const ms = mins * 60_000;
+    let timer: ReturnType<typeof setTimeout>;
+    let lastActivity = Date.now();
+    const doLock = (): void => {
+      void lockDb().finally(() => {
+        // lockDb 是异步 IPC：往返期间若有新活动，取消锁定、重启计时，遵守「无操作达时长才锁」。
+        if (Date.now() - lastActivity < ms) {
+          reset();
+          return;
+        }
+        resetDesktopRepo();
+        setRepo(null);
+        setGate('locked');
+      });
+    };
+    const reset = (): void => {
+      lastActivity = Date.now();
+      clearTimeout(timer);
+      timer = setTimeout(doLock, ms);
+    };
+    const evts: Array<keyof WindowEventMap> = ['mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart'];
+    evts.forEach((e) => window.addEventListener(e, reset, { passive: true }));
+    reset();
+    return () => {
+      clearTimeout(timer);
+      evts.forEach((e) => window.removeEventListener(e, reset));
+    };
+  }, [gate, encrypted, settings]);
 
   // 归档账本只置 book.archived，其账户/流水仍 live（listAccounts/listTransactions 不按账本归档过滤）→
   // 聚合须按「未归档账本」收窄：归档账本的【账本专属】账户隐藏；但【全局账户】是跨账本共享、home 仅创建元数据，
@@ -223,6 +298,7 @@ export default function App() {
     return count > 0 ? { count, overdueCount, total } : null;
   }, [curBook, settings, suppliers, scoped.accounts, scoped.txns, convert]);
 
+  if (gate === 'locked') return <UnlockScreen onUnlocked={openAfterUnlock} />;
   if (!repo) return <div className="splash">账本加载中…</div>;
 
   function openBook(id: 'all' | string, type?: BookType): void {
@@ -350,6 +426,7 @@ export default function App() {
             settings={settings}
             usedCurrencies={new Set(liveAccounts.map((a) => a.currency))}
             reload={() => loadFrom(repo)}
+            onSecurityChange={refreshSecurity}
           />
         ) : cur === RECONCILE ? (
           <Reconcile repo={repo} accounts={liveAccounts} allTxns={txns} books={allBooks} reload={() => loadFrom(repo)} />

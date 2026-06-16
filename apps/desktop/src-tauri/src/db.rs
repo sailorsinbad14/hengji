@@ -88,6 +88,10 @@ fn run_exec(conn: &Connection, sql: &str, params: &[Json]) -> rusqlite::Result<(
 
 // ---- commands ----
 
+/// 本地库文件名（库与封装文件 heng.dek.tpm、迁移临时文件都在 config_dir 下，同卷便于 §9 原子替换）。
+/// 与 web 侧 bootstrap 的 'sqlite:heng.db' 一致；crypto 迁移据此定位待加/解密的库。
+pub const DB_FILE: &str = "heng.db";
+
 /// 应用配置目录（%APPDATA%\<bundle id>\）。库与封装文件（heng.dek.tpm）都放这里。
 /// 阶段 2 crypto 命令与 db_open 共用，确保 DEK 封装文件与库同目录（§9 同卷原子替换前提）。
 pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -122,12 +126,31 @@ pub fn open_db(full: &Path, key: Option<&str>) -> Result<Connection, String> {
 }
 
 /// 打开（或创建）本地库。path 形如 'sqlite:heng.db'，相对应用配置目录
-/// （与原 tauri-plugin-sql 同一位置，保留既有数据）。key=Some(dek_hex) 开 SQLCipher 密文库。
+/// （与原 tauri-plugin-sql 同一位置，保留既有数据）。
+/// `encrypted=true` 时用 **Rust 侧已解锁的 DEK**（Crypto state）开 SQLCipher 密文库——
+/// DEK 绝不跨 IPC 传给 JS，故这里只收一个布尔、自己去 Crypto state 取（须先 unlock）。
+/// `encrypted=false` 开明文库（未加密／演示外的桌面默认）。
 #[tauri::command]
-pub fn db_open(app: AppHandle, db: State<Db>, path: String, key: Option<String>) -> Result<(), String> {
+pub fn db_open(
+    app: AppHandle,
+    db: State<Db>,
+    crypto: State<crate::crypto::Crypto>,
+    path: String,
+    encrypted: bool,
+) -> Result<(), String> {
     let file = path.strip_prefix("sqlite:").unwrap_or(&path);
     let full = config_dir(&app)?.join(file);
-    let conn = open_db(&full, key.as_deref())?;
+    let conn = if encrypted {
+        // 先取 DEK→hex（在独立作用域里持 Crypto 锁），释放后再开库+持 Db 锁，保持「Crypto 先于 Db」的全局加锁序。
+        let hex = {
+            let guard = crypto.0.lock().unwrap();
+            let dek = guard.as_ref().ok_or("数据库已加密但尚未解锁")?;
+            crate::crypto::dek_hex(dek)
+        };
+        open_db(&full, Some(&hex))?
+    } else {
+        open_db(&full, None)?
+    };
     *db.0.lock().unwrap() = Some(conn);
     Ok(())
 }

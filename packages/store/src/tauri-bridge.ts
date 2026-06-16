@@ -6,9 +6,12 @@ import { invoke } from '@tauri-apps/api/core';
  * 经 IPC 调 Rust 的 db_* 命令。占位符 `$N` 仍由 Rust 侧翻成 `?N`。
  */
 export class TauriDb {
-  /** 打开本地库。key 给定则开 SQLCipher 加密库（阶段 2 用）；不给＝明文。 */
-  static async open(path: string, key?: string): Promise<TauriDb> {
-    await invoke('db_open', { path, key: key ?? null });
+  /**
+   * 打开本地库。`encrypted=true` 时 Rust 用**已解锁的 DEK**（Crypto state，须先 unlock）开 SQLCipher 密文库；
+   * DEK 绝不跨 IPC，故这里只传布尔、不传钥匙。`encrypted=false`＝明文库。
+   */
+  static async open(path: string, encrypted = false): Promise<TauriDb> {
+    await invoke('db_open', { path, encrypted });
     return new TauriDb();
   }
 

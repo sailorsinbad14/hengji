@@ -3,6 +3,8 @@ import type { AccountingBasis } from '@app/core';
 import type { Repository, StoredSetting } from '@app/store';
 import { currencyDef } from '../format';
 import type { CurrencyDef } from '../format';
+import { isDesktop } from '../db';
+import SecurityCard from '../components/SecurityCard';
 import {
   ADVANCED_KEY,
   APP_SCOPE,
@@ -36,11 +38,14 @@ export default function Settings({
   settings,
   usedCurrencies,
   reload,
+  onSecurityChange,
 }: {
   repo: Repository;
   settings: StoredSetting[];
   usedCurrencies: Set<string>;
   reload: () => Promise<void>;
+  /** 桌面加密状态变更（设/移除密码）后通知 App 刷新解锁门/自动锁状态。 */
+  onSecurityChange: () => void;
 }) {
   const advanced = advancedOn(settings);
   const basis = basisOf(settings);
@@ -123,6 +128,10 @@ export default function Settings({
         <h2>设置</h2>
         <span className="muted">全局 · 应用于所有账本</span>
       </div>
+
+      {isDesktop && (
+        <SecurityCard repo={repo} settings={settings} reload={reload} onSecurityChange={onSecurityChange} />
+      )}
 
       <div className="card">
         <label className="chkline">

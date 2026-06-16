@@ -83,6 +83,18 @@ export function advancedOn(settings: StoredSetting[]): boolean {
   return settings.find((s) => s.scope === APP_SCOPE && s.key === ADVANCED_KEY)?.value === 'on';
 }
 
+// —— 自动锁（app 级，仅桌面加密时生效）——默认 15 分钟无操作自动锁；'off'/'0'=关闭 ——
+export const AUTOLOCK_KEY = 'autoLockMin';
+export const DEFAULT_AUTOLOCK_MIN = 15;
+/** 自动锁分钟数；返回 0 = 关闭（不自动锁）。未设置默认 15 分钟。 */
+export function autoLockMinOf(settings: StoredSetting[]): number {
+  const v = settings.find((s) => s.scope === APP_SCOPE && s.key === AUTOLOCK_KEY)?.value;
+  if (v === undefined) return DEFAULT_AUTOLOCK_MIN;
+  if (v === 'off') return 0;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_AUTOLOCK_MIN;
+}
+
 // —— 多币种开关（app 级）——默认关：纯人民币 UI，隐藏币种管理与账户币种选择 ——
 export const MULTICURRENCY_KEY = 'multiCurrency';
 export function multiCurrencyOn(settings: StoredSetting[]): boolean {

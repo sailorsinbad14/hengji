@@ -34,15 +34,32 @@ export async function createBookWithChart(
 }
 
 /**
- * 模块级单例：StrictMode 双调 effect 也只 bootstrap 一次。
- * 桌面（Tauri）→ 本地 SQLite 持久化；浏览器 → 内存仓库 + 多账本样本数据演示。
+ * 浏览器演示仓库的模块级单例（StrictMode 双调 effect 也只 bootstrap 一次）。
+ * 桌面走 {@link openDesktopRepoOnce}（解锁门后才开库），不在模块加载时即 bootstrap。
  */
-export const ready: Promise<Repository> = isDesktop ? bootstrapDesktop() : bootstrapDemo();
+let demoRepoPromise: Promise<Repository> | null = null;
+export function demoRepoOnce(): Promise<Repository> {
+  if (!demoRepoPromise) demoRepoPromise = bootstrapDemo();
+  return demoRepoPromise;
+}
 
-/** 桌面：本地 SQLite（load 时自动迁移；遗留数据已回填 default 账本）。无账本时创建首个个人账本。 */
-async function bootstrapDesktop(): Promise<Repository> {
+/**
+ * 桌面：本地 SQLite（load 时自动迁移；遗留数据已回填 default 账本）。无账本时创建首个个人账本。
+ * `encrypted=true` 时须**已 unlock**（DEK 在 Rust 侧）。单例化：StrictMode 双调 / 重复解锁只开一次；
+ * 自动锁后调 {@link resetDesktopRepo} 复位，下次解锁重新开库。
+ */
+let desktopRepoPromise: Promise<Repository> | null = null;
+export function openDesktopRepoOnce(encrypted: boolean): Promise<Repository> {
+  if (!desktopRepoPromise) desktopRepoPromise = bootstrapDesktop(encrypted);
+  return desktopRepoPromise;
+}
+export function resetDesktopRepo(): void {
+  desktopRepoPromise = null;
+}
+
+async function bootstrapDesktop(encrypted: boolean): Promise<Repository> {
   const { TauriSqlRepository } = await import('@app/store/tauri');
-  const repo = await TauriSqlRepository.load('sqlite:heng.db');
+  const repo = await TauriSqlRepository.load('sqlite:heng.db', { encrypted });
   const books = await repo.listBooks({ includeArchived: true });
   if (books.length === 0) {
     await createBookWithChart(repo, '我的账本', 'personal');

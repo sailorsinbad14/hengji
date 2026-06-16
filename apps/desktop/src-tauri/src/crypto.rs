@@ -9,9 +9,11 @@
 //! - 改密＝**重封 under 新钥匙**（Spike 定 `PCP_CHANGEPASSWORD` 不可用）：用另一个 slot 建新钥匙、
 //!   封同一把 DEK、原子顶替信封、再删旧钥匙（两阶段原子 + 启动自愈，见 reconcile）。
 //!
-//! 本阶段边界（清晰标注，避免越界到后续阶段）：
-//! - **不**做明文↔密文库迁移（Phase 4 §9）；set/remove 仅建立/拆除封装。
-//! - **不**接 bootstrap / 解锁 UI（Phase 3）；命令只把 DEK 存在 Rust 侧，**绝不**回传 JS。
+//! 阶段 3（本阶段）新增：set_password/remove_password 含 **明↔密库原子迁移**（§9，sqlcipher_export +
+//! 同卷 rename + 迁移标记启动自愈）；db_open 从 Crypto state 取已解锁 DEK 开库（DEK **绝不**回传 JS）；
+//! 新增 lock 命令（自动锁/手动锁用）。security_status 先 reconcile 再判定（启动门自愈中断的迁移/改密）。
+//! 本阶段边界：
+//! - **不**做销毁（错 N 次）/ 备份导出 / kill-9 注入测试硬化（Phase 4）。
 //! - **不**做无芯片软件弱版（本期后置）。
 //!
 //! 安全纪律（来自 Spike #2）：除了**唯一一次**蓄意的错口令强制性测试（1/32 DA strike），
@@ -26,7 +28,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, State};
 use zeroize::Zeroizing;
 
-use crate::db::config_dir;
+use crate::db::{config_dir, open_db, Db, DB_FILE};
+
+/// DEK → 64 位十六进制（Zeroizing：用完清零）。供 db_open / 命令开 SQLCipher 库时传 raw-key。
+/// DEK 本体仍只存 Rust 侧 Crypto state，hex 仅在 Rust 内部短暂存在、绝不回传 JS。
+pub(crate) fn dek_hex(dek: &[u8; 32]) -> Zeroizing<String> {
+    Zeroizing::new(dek.iter().map(|b| format!("{b:02x}")).collect())
+}
 
 /// 已解锁的 DEK（Zeroizing：替换/drop 时清零）。仅存在 Rust 侧，绝不跨 IPC 回传 JS。
 /// 这把锁还**串行化所有 crypto 命令**：Tauri 同步命令跑在线程池上，可并发；改密/解锁/移除都在
@@ -67,12 +75,16 @@ pub struct SecurityStatus {
 }
 
 mod engine {
-    //! dir-based 纯引擎：所有 NCrypt FFI + 信封 IO 都在此，便于单测（不依赖 Tauri runtime）。
+    //! dir-based 纯引擎：所有 NCrypt FFI + 信封 IO + 明↔密库迁移都在此，便于单测（不依赖 Tauri runtime）。
     use super::*;
+    use rusqlite::Connection;
     use sha2::{Digest, Sha256};
+    use std::io::Read as _;
     use windows::core::{w, PCWSTR};
     use windows::Win32::Security::Cryptography::*;
     use zeroize::Zeroize;
+
+    use crate::db::DB_FILE;
 
     const PROVIDER: PCWSTR = w!("Microsoft Platform Crypto Provider");
     // 两个固定 slot：改密时 ping-pong（新钥匙建在另一个 slot，验证+提交后才删旧）。
@@ -88,6 +100,13 @@ mod engine {
     pub(super) const ENVELOPE: &str = "heng.dek.tpm";
     /// 改密 staging（写好待提交的新信封；reconcile 据其存在判定“改密未提交”→回滚）。
     const ENVELOPE_NEW: &str = "heng.dek.tpm.new";
+    /// 明↔密迁移标记（含方向 + 信封）。存在＝迁移进行中；reconcile 据库文件头判定提交点哪侧后前滚/回滚。
+    const MIGRATE_MARKER: &str = "heng.migrate";
+    /// 迁移临时库（同目录＝同卷，便于原子 rename 顶替 heng.db）。
+    const ENC_TMP: &str = "heng.db.enc.tmp";
+    const PLAIN_TMP: &str = "heng.db.plain.tmp";
+    /// 明文 SQLite 文件头（前 16 字节）。SQLCipher 密文库此处是随机密文，据此区分明/密。
+    const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
     // 关注的 NCrypt HRESULT（数值比较，避免 import 不确定性）。
     const NTE_BAD_DATA: u32 = 0x8009_0005; // OAEP 解包失败（口令对但密文坏）→ Corrupt
@@ -221,6 +240,195 @@ mod engine {
         f.write_all(&data).map_err(internal_io)?;
         f.sync_all().map_err(internal_io)?;
         Ok(())
+    }
+
+    /// 原子顶替信封：写 `.tmp` + fsync → rename 到 ENVELOPE（同卷原子，Spike #4 已验）。
+    /// rename 用重试版（与迁移/改密一致，吃掉 Windows 下 AV/索引器对刚写文件的短暂持锁；
+    /// 也缩小 set_password「迁移已提交但信封 commit 失败」的窗口，review enc-4）。
+    fn write_envelope_atomic(dir: &Path, env: &WrapEnvelope) -> Result<(), CryptoError> {
+        let tmp = dir.join(format!("{ENVELOPE}.tmp"));
+        write_sync(&tmp, env)?;
+        rename_with_retry(&tmp, &dir.join(ENVELOPE))
+    }
+
+    // ---- 明↔密库迁移标记（§9 启动自愈的依据） ----
+    #[derive(Serialize, Deserialize, Debug, Clone)]
+    struct MigrateMarker {
+        /// "encrypt"（明→密）或 "decrypt"（密→明）。
+        direction: String,
+        /// 该次迁移对应的信封（前滚提交 / 回滚恢复都用它，自愈无需口令）。
+        envelope: WrapEnvelope,
+    }
+    fn write_marker(dir: &Path, m: &MigrateMarker) -> Result<(), CryptoError> {
+        let data = serde_json::to_vec_pretty(m).map_err(|e| internal(format!("serialize marker: {e}")))?;
+        let mut f = File::create(dir.join(MIGRATE_MARKER)).map_err(internal_io)?;
+        f.write_all(&data).map_err(internal_io)?;
+        f.sync_all().map_err(internal_io)?;
+        Ok(())
+    }
+    fn read_marker(path: &Path) -> Result<MigrateMarker, CryptoError> {
+        let data = std::fs::read(path).map_err(internal_io)?;
+        serde_json::from_slice(&data).map_err(|e| internal(format!("parse marker: {e}")))
+    }
+
+    /// 库文件头是否为明文 SQLite。文件缺失／太短 → 视为「非明文」（保守：不会把损坏库当明文去开）。
+    pub(super) fn db_is_plaintext(path: &Path) -> bool {
+        match File::open(path) {
+            Ok(mut f) => {
+                let mut buf = [0u8; 16];
+                f.read_exact(&mut buf).is_ok() && &buf == SQLITE_HEADER
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// 同卷原子 rename 顶替。Windows 下刚关闭连接的库文件可能被 AV/索引器/close-pending 短暂持锁，
+    /// rename 报 ACCESS_DENIED(os error 5)——Spike #2 probe2 定为**可重试**：小退避重试几次再放弃。
+    fn rename_with_retry(from: &Path, to: &Path) -> Result<(), CryptoError> {
+        let mut last: Option<std::io::Error> = None;
+        for i in 0..12u32 {
+            match std::fs::rename(from, to) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    last = Some(e);
+                    std::thread::sleep(std::time::Duration::from_millis(40 * u64::from(i + 1)));
+                }
+            }
+        }
+        Err(internal_io(last.expect("loop runs ≥1 time")))
+    }
+
+    /// 删库的 WAL/SHM 边车（迁移后残留旧边车会损坏新库，Spike #2 probe2）。
+    fn clean_sidecars(db: &Path) {
+        for ext in ["-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{ext}", db.display()));
+        }
+    }
+
+    /// 校验迁移目标库：能用预期 key 打开 + integrity_check=ok + 每张用户表行数与源库一致。
+    /// 在「源连接仍 ATTACH 着目标(别名 alias)」时调用，趁手对比两库行数（§9「逐行一致」的低成本等价：
+    /// integrity_check 抓页级损坏、行数比对抓 export 漏表/截断；全行 hash 比对留 Phase 4 硬化）。
+    fn verify_attached(src: &Connection, alias: &str) -> Result<(), CryptoError> {
+        let ok: String = src
+            .query_row(&format!("PRAGMA {alias}.integrity_check"), [], |r| r.get(0))
+            .map_err(|e| corrupt(&format!("integrity_check: {e}")))?;
+        if ok != "ok" {
+            return Err(corrupt(&format!("目标库完整性校验失败: {ok}")));
+        }
+        let tables: Vec<String> = {
+            let mut st = src
+                .prepare("SELECT name FROM main.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+                .map_err(|e| corrupt(&format!("list tables: {e}")))?;
+            let rows = st
+                .query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| corrupt(&format!("list tables: {e}")))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| corrupt(&format!("list tables: {e}")))?
+        };
+        for t in &tables {
+            // 表名取自本库 sqlite_master（自有 schema，固定安全标识符）；双引号防御。
+            let q = format!("SELECT (SELECT count(*) FROM main.\"{t}\"), (SELECT count(*) FROM {alias}.\"{t}\")");
+            let (a, b): (i64, i64) = src
+                .query_row(&q, [], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(|e| corrupt(&format!("count {t}: {e}")))?;
+            if a != b {
+                return Err(corrupt(&format!("表 {t} 行数不一致: 源 {a} ≠ 目标 {b}")));
+            }
+        }
+        Ok(())
+    }
+
+    /// 用 sqlcipher_export 把 `src`（已开好的连接）整库导出到 ATTACH 的 `alias`，并补传 user_version
+    /// （sqlcipher_export **不**复制 PRAGMA user_version——丢了会让下次启动重跑全部迁移）。
+    fn export_into(src: &Connection, alias: &str) -> Result<(), CryptoError> {
+        let uv: i64 = src
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(|e| corrupt(&format!("read user_version: {e}")))?;
+        // sqlcipher_export 是带副作用的 SQL 函数；用 query 并排空结果集（不假设返回行数）。
+        {
+            let mut st = src
+                .prepare(&format!("SELECT sqlcipher_export('{alias}')"))
+                .map_err(|e| corrupt(&format!("sqlcipher_export prepare: {e}")))?;
+            let mut rows = st.query([]).map_err(|e| corrupt(&format!("sqlcipher_export: {e}")))?;
+            while rows.next().map_err(|e| corrupt(&format!("sqlcipher_export: {e}")))?.is_some() {}
+        }
+        src.execute_batch(&format!("PRAGMA {alias}.user_version = {uv};"))
+            .map_err(|e| corrupt(&format!("set user_version: {e}")))?;
+        Ok(())
+    }
+
+    /// 明文 heng.db → 密文（用 dek）。调用方须已关闭 State 连接（文件不被占用）。
+    /// 协议：清残留 tmp → 开明文源 → checkpoint 折叠 WAL → ATTACH 密文 tmp(raw key) → export+校验 →
+    /// DETACH+关闭 → fsync tmp → **原子 rename tmp→heng.db（提交点）** → 清明文边车。失败前回滚（删 tmp）。
+    fn migrate_encrypt(dir: &Path, dek: &[u8; 32]) -> Result<(), CryptoError> {
+        let db = dir.join(DB_FILE);
+        let tmp = dir.join(ENC_TMP);
+        let _ = std::fs::remove_file(&tmp);
+        clean_sidecars(&tmp);
+        // DEK hex 与内嵌它的 SQL 全程 Zeroizing（用后清零，不在堆上留明文密钥残渣）。
+        // raw-key 字符串字面量；dek_hex 恒为 64 位十六进制（自产），无注入。tmp 路径用绑定参数。
+        // 注：错误只回传内层 rusqlite error（不含语句文本，SQLite 设计如此），DEK 不入 CryptoError.message。
+        let dek_hex = super::dek_hex(dek);
+        let attach = Zeroizing::new(format!("ATTACH DATABASE ?1 AS enc KEY \"x'{}'\"", &*dek_hex));
+        let run = || -> Result<(), CryptoError> {
+            let src = Connection::open(&db).map_err(|e| corrupt(&format!("open plaintext db: {e}")))?;
+            src.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .map_err(|e| corrupt(&format!("checkpoint: {e}")))?;
+            src.execute(attach.as_str(), [tmp.to_string_lossy().as_ref()])
+                .map_err(|e| corrupt(&format!("attach enc: {e}")))?;
+            export_into(&src, "enc")?;
+            verify_attached(&src, "enc")?;
+            src.execute_batch("DETACH DATABASE enc;")
+                .map_err(|e| corrupt(&format!("detach: {e}")))?;
+            // 显式 close（同步、抛 BUSY）而非 drop——drop 在 Windows 上可能延迟释放文件句柄，
+            // 导致随后 rename 顶替 heng.db 报 ACCESS_DENIED。
+            // tmp 内容已由 SQLite 在 sqlcipher_export 提交时 fsync（synchronous=FULL，rollback-journal）；
+            // 不再 reopen-fsync（Windows 下刚写完的 .db 常被 Defender/索引器短暂独占，reopen 会 ACCESS_DENIED）。
+            src.close().map_err(|(_, e)| corrupt(&format!("close src: {e}")))?;
+            rename_with_retry(&tmp, &db)?; // 提交点（retry 吃掉 AV/索引器对 tmp/db 的短暂持锁）
+            clean_sidecars(&db);
+            Ok(())
+        };
+        let r = run();
+        if r.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            clean_sidecars(&tmp);
+        }
+        r
+    }
+
+    /// 密文 heng.db（用 dek）→ 明文。调用方须已关闭 State 连接。协议同上、方向反转（ATTACH 目标 KEY ''＝明文）。
+    fn migrate_decrypt(dir: &Path, dek: &[u8; 32]) -> Result<(), CryptoError> {
+        let db = dir.join(DB_FILE);
+        let tmp = dir.join(PLAIN_TMP);
+        let _ = std::fs::remove_file(&tmp);
+        clean_sidecars(&tmp);
+        let dek_hex = super::dek_hex(dek); // Zeroizing
+        let key_pragma = Zeroizing::new(format!("PRAGMA key = \"x'{}'\";", &*dek_hex));
+        let run = || -> Result<(), CryptoError> {
+            let src = Connection::open(&db).map_err(|e| corrupt(&format!("open cipher db: {e}")))?;
+            // raw-key 必为开库首条 PRAGMA。
+            src.execute_batch(key_pragma.as_str())
+                .map_err(|e| corrupt(&format!("pragma key: {e}")))?;
+            src.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .map_err(|e| corrupt(&format!("checkpoint: {e}")))?;
+            src.execute("ATTACH DATABASE ?1 AS plain KEY ''", [tmp.to_string_lossy().as_ref()])
+                .map_err(|e| corrupt(&format!("attach plain: {e}")))?;
+            export_into(&src, "plain")?;
+            verify_attached(&src, "plain")?;
+            src.execute_batch("DETACH DATABASE plain;")
+                .map_err(|e| corrupt(&format!("detach: {e}")))?;
+            src.close().map_err(|(_, e)| corrupt(&format!("close src: {e}")))?;
+            rename_with_retry(&tmp, &db)?; // 提交点（tmp 已由 SQLite 提交时 fsync；retry 吃掉短暂持锁）
+            clean_sidecars(&db);
+            Ok(())
+        };
+        let r = run();
+        if r.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            clean_sidecars(&tmp);
+        }
+        r
     }
 
     // ---- 口令 → PCP 使用授权摘要（UTF-16LE → SHA-256，与 Spike #2 一致） ----
@@ -379,11 +587,81 @@ mod engine {
         Ok(dek)
     }
 
-    /// 启动/操作前自愈（DA-free，绝不靠猜口令）：
-    /// - `heng.dek.tpm.new` 存在 ⇒ 改密在 commit(rename) 前中断 → **回滚**：删该 staging slot 的钥匙 + 删 .new 文件。
-    ///   （此时 heng.dek.tpm 仍是旧信封、旧口令可解；改密视为未发生，UI 应提示用旧口令。）
-    /// - 顺带清掉 commit 后遗留的旧 slot 孤儿钥匙（rename 已成、.new 不在，但删旧 slot 未成功的情况）。
-    fn reconcile(dir: &Path) {
+    /// 删除移除密码涉及的 slot 钥匙。`slot=Some(s)`：删 s + other(s)；`slot=None`（标记损坏、方向未知）：删 A、B 两个。
+    /// 返回 true＝全部成功（含「本就不存在」幂等成功）。芯片不可用或删失败 → false，调用方据此**保留迁移标记**
+    /// 作锚点，下次 reconcile 重试 —— 杜绝「信封已删但 slot 残留、又无锚点可清」的孤儿 slot（review enc-2/3/5）。
+    fn delete_both_slots(slot: Option<Slot>) -> bool {
+        let Ok(prov) = open_provider() else { return false };
+        let (s1, s2) = match slot {
+            Some(s) => (s, other_slot(s)),
+            None => (Slot::A, Slot::B),
+        };
+        // 两个都尝试（非短路 &），即便第一个失败也删第二个。
+        delete_slot_key(&prov, s1).is_ok() & delete_slot_key(&prov, s2).is_ok()
+    }
+
+    /// 启动/操作前自愈（DA-free，绝不靠猜口令）。三段，按依赖序：
+    /// 1. **迁移标记 `heng.migrate`**（明↔密迁移中断）：据库文件头判定在原子 rename(提交点)哪一侧——
+    ///    - encrypt：库仍明文 ⇒ rename 未发生 → **回滚**（删未提交信封/tmp/staging slot，回到明文）；
+    ///      库已密文 ⇒ rename 已成 → **前滚**（提交信封，进入加密态）。
+    ///    - decrypt：库仍密文 ⇒ **回滚**（恢复信封、删 plain tmp，留在加密态）；
+    ///      库已明文 ⇒ **前滚**（删信封+两 slot，完成解密）。
+    /// 2. **`heng.dek.tpm.new`**（改密在 commit 前中断）：删 staging slot + .new（用旧口令仍可解）。
+    /// 3. 顺带清掉 live 信封的非 live slot 孤儿钥匙。
+    pub(super) fn reconcile(dir: &Path) {
+        // —— 1. 迁移标记 ——
+        let markerp = dir.join(MIGRATE_MARKER);
+        if markerp.exists() {
+            // keep_marker：清理未竟（slot 没删干净）时保留标记作下次重试锚点（标记内含 slot 信息，无需信封）。
+            let mut keep_marker = false;
+            match read_marker(&markerp) {
+                Ok(m) => {
+                    let plaintext = db_is_plaintext(&dir.join(DB_FILE));
+                    let slot = slot_from(&m.envelope.slot);
+                    match m.direction.as_str() {
+                        "encrypt" => {
+                            if plaintext {
+                                // 回滚到明文：删未提交信封（及其 .tmp）+ enc tmp + staging slot。
+                                let _ = std::fs::remove_file(dir.join(ENVELOPE));
+                                let _ = std::fs::remove_file(dir.join(format!("{ENVELOPE}.tmp")));
+                                let _ = std::fs::remove_file(dir.join(ENC_TMP));
+                                if let (Some(s), Ok(prov)) = (slot, open_provider()) {
+                                    let _ = delete_slot_key(&prov, s);
+                                }
+                            } else {
+                                // 前滚：提交信封（幂等）。
+                                let _ = write_envelope_atomic(dir, &m.envelope);
+                            }
+                        }
+                        "decrypt" => {
+                            if plaintext {
+                                // 前滚：完成移除（删两 slot + 信封）。slot 没删净则保留标记下次重试。
+                                keep_marker = !delete_both_slots(slot);
+                                let _ = std::fs::remove_file(dir.join(ENVELOPE));
+                            } else {
+                                // 回滚到加密态：恢复信封（幂等）+ 删 plain tmp。
+                                let _ = write_envelope_atomic(dir, &m.envelope);
+                                let _ = std::fs::remove_file(dir.join(PLAIN_TMP));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // 标记损坏（极罕见——write 时 sync_all 后才返回；多为外部损坏，方向已不可知）：
+                // 据库文件头做**方向无关**自愈——明文库 ⇒ 任何信封/slot 都已过时，删之（slot 没删净则保留标记重试）；
+                // 密文库 ⇒ 一致的加密态，不动信封。enc-1：不再无脑删坏标记，避免「明文库却 status=已加密」的悬挂态。
+                Err(_) => {
+                    if db_is_plaintext(&dir.join(DB_FILE)) {
+                        let _ = std::fs::remove_file(dir.join(ENVELOPE));
+                        keep_marker = !delete_both_slots(None);
+                    }
+                }
+            }
+            if !keep_marker {
+                let _ = std::fs::remove_file(&markerp);
+            }
+        }
+        // —— 2. 改密 staging ——
         let newp = dir.join(ENVELOPE_NEW);
         if newp.exists() {
             if let Ok(env) = read_envelope(&newp) {
@@ -393,9 +671,10 @@ mod engine {
             }
             let _ = std::fs::remove_file(&newp);
         }
+        // —— 3. 孤儿 slot ——
         if let Ok(env) = read_envelope(&dir.join(ENVELOPE)) {
             if let (Some(live), Ok(prov)) = (slot_from(&env.slot), open_provider()) {
-                let _ = delete_slot_key(&prov, other_slot(live)); // 删非 live 的 slot（孤儿）
+                let _ = delete_slot_key(&prov, other_slot(live));
             }
         }
     }
@@ -416,9 +695,11 @@ mod engine {
         }
     }
 
-    /// 首次设密码：随机 DEK → slot A 建钥匙(口令) → 封 DEK → 原子写信封。返回 DEK（命令存 Rust 侧）。
-    /// 注意：本阶段**不**迁移 heng.db（Phase 4）；调用前应确保库尚明文。
+    /// 首次设密码（含明文→密文迁移，§9）：随机 DEK → slot A 建钥匙(口令) → 封 DEK → 写迁移标记 →
+    /// **迁移 heng.db 明文→密文（原子 rename = 提交点）** → 提交信封 → 删标记。返回 DEK（命令存 Rust 侧）。
+    /// 调用方须已关闭 State 连接，使 heng.db 文件不被占用。
     pub(super) fn set_password(dir: &Path, pw: &str) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+        reconcile(dir); // 先healing 任何上次中断残留，从一致态开始
         if dir.join(ENVELOPE).exists() {
             return Err(internal("already encrypted".into()));
         }
@@ -427,9 +708,16 @@ mod engine {
         let key = create_slot_key(&prov, Slot::A, pw)?;
         let ct = wrap_dek(&key, &dek)?;
         let env = WrapEnvelope::new(Slot::A, &ct);
-        let tmp = dir.join(format!("{ENVELOPE}.tmp"));
-        write_sync(&tmp, &env)?;
-        std::fs::rename(&tmp, dir.join(ENVELOPE)).map_err(internal_io)?;
+        write_marker(dir, &MigrateMarker { direction: "encrypt".into(), envelope: env.clone() })?;
+        if let Err(e) = migrate_encrypt(dir, &dek) {
+            // 迁移失败 ⇒ heng.db 仍明文（migrate_encrypt 已删 tmp）→ 完整回滚：删 staging slot + 标记。
+            let _ = delete_slot_key(&prov, Slot::A);
+            let _ = std::fs::remove_file(dir.join(MIGRATE_MARKER));
+            return Err(e);
+        }
+        // heng.db 已是密文 ⇒ 提交信封（幂等原子）。若此处失败：标记仍在 + 库密文 → 下次启动 reconcile 前滚。
+        write_envelope_atomic(dir, &env)?;
+        let _ = std::fs::remove_file(dir.join(MIGRATE_MARKER));
         Ok(dek)
     }
 
@@ -474,33 +762,44 @@ mod engine {
                 return Err(corrupt("re-wrap verification mismatch"));
             }
         }
-        std::fs::rename(&newp, dir.join(ENVELOPE)).map_err(internal_io)?; // commit
+        rename_with_retry(&newp, &dir.join(ENVELOPE))?; // commit（与迁移一致用重试 rename，吃掉 AV/索引器短暂持锁）
         let _ = delete_slot_key(&prov, live); // 失败不致命，reconcile 兜底
         Ok(())
     }
 
-    /// 移除密码：验证口令（解出 DEK）后拆封装。
-    /// 本阶段仅删信封 + slot 钥匙；Phase 4 在此用 DEK 把密文库解密回明文（§9 反向迁移）。
-    /// 删序：**先删信封**（删后即读作未加密），再删钥匙 —— 避免“信封在但钥匙没了＝打不开”的死局。
+    /// 移除密码（含密文→明文反向迁移，§9）：验证口令（解出 DEK）→ 写迁移标记 →
+    /// **迁移 heng.db 密文→明文（原子 rename = 提交点）** → 删信封 + 两 slot → 删标记。
+    /// 调用方须已关闭 State 连接。提交点前失败 ⇒ 留在加密态（信封/slot 都在）。
     pub(super) fn remove_password(dir: &Path, pw: &str) -> Result<(), CryptoError> {
         reconcile(dir);
         let env = read_envelope(&dir.join(ENVELOPE))?;
         let slot = slot_from(&env.slot).ok_or_else(|| corrupt("unknown slot"))?;
         let ct = decode_hex(&env.wrapped_dek_hex).ok_or_else(|| corrupt("bad ciphertext hex"))?;
         let prov = open_provider()?;
-        let _dek = {
+        let dek = {
             let k = open_slot_key(&prov, slot, pw)?;
-            unwrap_dek(&k, &ct)? // 验证口令；错则 WrongPassword
+            unwrap_dek(&k, &ct)? // 验证口令；错则 WrongPassword（迁移尚未开始，不动库）
         };
-        std::fs::remove_file(dir.join(ENVELOPE)).map_err(internal_io)?;
-        let _ = delete_slot_key(&prov, slot);
-        let _ = delete_slot_key(&prov, other_slot(slot));
+        write_marker(dir, &MigrateMarker { direction: "decrypt".into(), envelope: env.clone() })?;
+        if let Err(e) = migrate_decrypt(dir, &dek) {
+            // 迁移失败 ⇒ heng.db 仍密文（已删 tmp）+ 信封/slot 都在 → 一致的加密态；删标记后原样返回。
+            let _ = std::fs::remove_file(dir.join(MIGRATE_MARKER));
+            return Err(e);
+        }
+        // heng.db 已明文 ⇒ 拆封装：先删两 slot + 删信封；仅当 slot 全删净才删标记，否则保留标记
+        // （含 slot 信息）作锚点、下次 reconcile 重试，杜绝「信封已删 + slot 残留 + 无锚点」的孤儿 slot（review enc-2/5）。
+        let slots_gone = delete_both_slots(Some(slot));
+        let _ = std::fs::remove_file(dir.join(ENVELOPE));
+        if slots_gone {
+            let _ = std::fs::remove_file(dir.join(MIGRATE_MARKER));
+        }
         Ok(())
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::db::open_db; // 仅测试用（迁移/TPM roundtrip 开库读回）
 
         // ---- 纯逻辑（无 TPM、可自动跑、parallel-safe） ----
 
@@ -550,6 +849,69 @@ mod engine {
             assert_eq!(other_slot(Slot::A), Slot::B);
             assert_eq!(slot_from("a"), Some(Slot::A));
             assert_eq!(slot_from("x"), None);
+        }
+
+        #[test]
+        fn marker_serde_roundtrip() {
+            let m = MigrateMarker { direction: "encrypt".into(), envelope: WrapEnvelope::new(Slot::A, &[9u8, 8, 7]) };
+            let back: MigrateMarker = serde_json::from_slice(&serde_json::to_vec(&m).unwrap()).unwrap();
+            assert_eq!(back.direction, "encrypt");
+            assert_eq!(back.envelope.slot, "a");
+            assert_eq!(back.envelope.wrapped_dek_hex, "090807");
+        }
+
+        #[test]
+        fn db_is_plaintext_detects_header() {
+            let dir = std::env::temp_dir().join(format!("heng-hdr-test-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            // 真明文 SQLite 库 → true
+            let plain = dir.join("plain.db");
+            Connection::open(&plain).unwrap().execute_batch("CREATE TABLE t(x)").unwrap();
+            assert!(db_is_plaintext(&plain));
+            // 随机字节（模拟密文头）→ false；缺失 → false
+            let cipherish = dir.join("cipher.db");
+            std::fs::write(&cipherish, [0xABu8; 64]).unwrap();
+            assert!(!db_is_plaintext(&cipherish));
+            assert!(!db_is_plaintext(&dir.join("missing.db")));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// 明→密→明 迁移：数据 + user_version 全程保留，库头随之翻转。**纯 DEK（无 TPM）、0 DA、自动跑**——
+        /// 覆盖本阶段最高风险的新代码（sqlcipher_export + user_version 补传 + 原子 rename）。
+        #[test]
+        fn migration_roundtrip_preserves_data_and_user_version() {
+            let dir = std::env::temp_dir().join(format!("heng-migrate-test-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let db = dir.join(DB_FILE);
+            {
+                let conn = Connection::open(&db).unwrap();
+                conn.execute_batch("PRAGMA user_version=7; CREATE TABLE t(x TEXT); INSERT INTO t VALUES('a'),('b'),('c');")
+                    .unwrap();
+            }
+            let dek = [0x11u8; 32];
+            // 明 → 密
+            migrate_encrypt(&dir, &dek).unwrap();
+            assert!(!db_is_plaintext(&db), "迁移后库头不应是明文");
+            {
+                let conn = open_db(&db, Some(&encode_hex(&dek))).unwrap();
+                let n: i64 = conn.query_row("SELECT count(*) FROM t", [], |r| r.get(0)).unwrap();
+                assert_eq!(n, 3);
+                let uv: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+                assert_eq!(uv, 7, "user_version 必须随迁移保留（否则下次启动重跑全部迁移）");
+            }
+            // 密 → 明
+            migrate_decrypt(&dir, &dek).unwrap();
+            assert!(db_is_plaintext(&db), "解密后库头应是明文");
+            {
+                let conn = open_db(&db, None).unwrap();
+                let n: i64 = conn.query_row("SELECT count(*) FROM t", [], |r| r.get(0)).unwrap();
+                assert_eq!(n, 3);
+                let uv: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+                assert_eq!(uv, 7);
+            }
+            let _ = std::fs::remove_dir_all(&dir);
         }
 
         // ---- 真 TPM 集成测试（消耗用户机芯片 + DA；默认 #[ignore]） ----
@@ -620,7 +982,6 @@ mod engine {
         #[test]
         #[ignore = "touches real TPM; run manually, serial"]
         fn tpm_db_encrypt_lock_unlock() {
-            use crate::db::open_db;
             let dir = std::env::temp_dir().join(format!("heng-crypto-db-{}", std::process::id()));
             reset_tpm_test(&dir);
             let dbf = dir.join("t.db");
@@ -656,38 +1017,62 @@ mod engine {
 
 // ---- Tauri 命令（薄包装；DEK 只存 Rust 侧 Crypto state，绝不回传 JS） ----
 
-fn dir_err(m: String) -> CryptoError {
-    CryptoError {
-        class: FailClass::Internal,
-        code: 0,
-        message: m,
-    }
+/// 基建错（目录解析 / 开库 IO 等，非解锁三态）→ FailClass::Internal。
+fn internal_err(m: String) -> CryptoError {
+    CryptoError { class: FailClass::Internal, code: 0, message: m }
 }
 
 #[tauri::command]
 pub fn security_status(app: AppHandle, crypto: State<Crypto>) -> Result<SecurityStatus, String> {
     let dir = config_dir(&app)?;
-    let _op = crypto.0.lock().unwrap(); // 串行化（不与改密的 rename 撞读）
+    let _op = crypto.0.lock().unwrap(); // 串行化（不与改密/迁移的 rename 撞读）
+    engine::reconcile(&dir); // 启动门先自愈：把任何中断的迁移/改密healing 到一致态，再据此判定加密与否
     Ok(engine::status(&dir))
 }
 
+/// 设密码（含明文→密文迁移）。全程持 Crypto + Db 两把锁（序 Crypto→Db，与 db_open/lock 一致）：
+/// 关闭 State 连接 → 迁移 → 重开。迁移期间 db_select 等会阻塞在 Db 锁上、待重开后继续。
 #[tauri::command]
-pub fn set_password(app: AppHandle, crypto: State<Crypto>, password: String) -> Result<(), CryptoError> {
-    let dir = config_dir(&app).map_err(dir_err)?;
-    let mut dek_slot = crypto.0.lock().unwrap(); // 持锁全程：串行化 + 存 DEK
-    let dek = engine::set_password(&dir, &password)?;
-    *dek_slot = Some(dek);
-    // Phase 4：在此把明文 heng.db 原子迁移为 SQLCipher 密文库（§9）。本阶段仅建立封装。
-    Ok(())
+pub fn set_password(
+    app: AppHandle,
+    crypto: State<Crypto>,
+    db: State<Db>,
+    password: String,
+) -> Result<(), CryptoError> {
+    let dir = config_dir(&app).map_err(internal_err)?;
+    let db_file = dir.join(DB_FILE);
+    let mut dek_slot = crypto.0.lock().unwrap();
+    let mut conn_slot = db.0.lock().unwrap();
+    *conn_slot = None; // 释放 heng.db 文件供原子替换
+    match engine::set_password(&dir, &password) {
+        Ok(dek) => {
+            // 迁移已提交＝库已密文。DEK 先入 state：即便随后 open_db 因瞬时文件锁失败，
+            // 本会话后续 db_open(encrypted) 或重启解锁仍能用它开库，不丢密钥（review lock-1/sec-1）。
+            let opened = open_db(&db_file, Some(&dek_hex(&dek)));
+            *dek_slot = Some(dek);
+            *conn_slot = Some(opened.map_err(internal_err)?);
+            Ok(())
+        }
+        Err(e) => {
+            // 失败：engine 已尽力回滚；reconcile 兜底healing。据库头重开连接（明文常态；若已前滚成密文则本会话无 DEK，留待重启解锁）。
+            engine::reconcile(&dir);
+            if engine::db_is_plaintext(&db_file) {
+                if let Ok(conn) = open_db(&db_file, None) {
+                    *conn_slot = Some(conn);
+                }
+            }
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
 pub fn unlock(app: AppHandle, crypto: State<Crypto>, password: String) -> Result<(), CryptoError> {
-    let dir = config_dir(&app).map_err(dir_err)?;
+    let dir = config_dir(&app).map_err(internal_err)?;
     let mut dek_slot = crypto.0.lock().unwrap();
     let dek = engine::unlock(&dir, &password)?;
     *dek_slot = Some(dek);
-    // Phase 3：bootstrap 在解锁成功后取该 DEK 开 SQLCipher 库（db_open 带 key）。
+    // bootstrap 在解锁成功后调 db_open(encrypted=true)，从 Crypto state 取该 DEK 开 SQLCipher 库。
     Ok(())
 }
 
@@ -698,16 +1083,54 @@ pub fn change_password(
     old_password: String,
     new_password: String,
 ) -> Result<(), CryptoError> {
-    let dir = config_dir(&app).map_err(dir_err)?;
-    let _op = crypto.0.lock().unwrap(); // 持锁全程：改密的两阶段原子序列必须独占
+    let dir = config_dir(&app).map_err(internal_err)?;
+    let _op = crypto.0.lock().unwrap(); // 持锁全程：改密的两阶段原子序列必须独占（不动数据库密文）
     engine::change_password(&dir, &old_password, &new_password)
 }
 
+/// 移除密码（含密文→明文迁移）。锁/连接处理同 set_password。
 #[tauri::command]
-pub fn remove_password(app: AppHandle, crypto: State<Crypto>, password: String) -> Result<(), CryptoError> {
-    let dir = config_dir(&app).map_err(dir_err)?;
+pub fn remove_password(
+    app: AppHandle,
+    crypto: State<Crypto>,
+    db: State<Db>,
+    password: String,
+) -> Result<(), CryptoError> {
+    let dir = config_dir(&app).map_err(internal_err)?;
+    let db_file = dir.join(DB_FILE);
     let mut dek_slot = crypto.0.lock().unwrap();
-    engine::remove_password(&dir, &password)?;
-    *dek_slot = None; // 清掉已解锁 DEK
+    let mut conn_slot = db.0.lock().unwrap();
+    *conn_slot = None;
+    match engine::remove_password(&dir, &password) {
+        Ok(()) => {
+            let conn = open_db(&db_file, None).map_err(internal_err)?; // 库已明文
+            *conn_slot = Some(conn);
+            *dek_slot = None; // 清掉已解锁 DEK
+            Ok(())
+        }
+        Err(e) => {
+            engine::reconcile(&dir); // 与 set_password 错误路径对称：healing 任何中断的迁移再重开连接
+            // 提交点前失败 ⇒ 仍是加密态；用本会话已解锁的 DEK 重开密文连接（移除失败不清 dek_slot）。
+            if let Some(dek) = dek_slot.as_ref() {
+                if let Ok(conn) = open_db(&db_file, Some(&dek_hex(dek))) {
+                    *conn_slot = Some(conn);
+                }
+            } else if engine::db_is_plaintext(&db_file) {
+                if let Ok(conn) = open_db(&db_file, None) {
+                    *conn_slot = Some(conn);
+                }
+            }
+            Err(e)
+        }
+    }
+}
+
+/// 锁定：清掉已解锁 DEK + 关闭 DB 连接（自动锁 / 手动锁用）。之后 UI 回到解锁屏，重新 unlock→db_open。
+#[tauri::command]
+pub fn lock(crypto: State<Crypto>, db: State<Db>) -> Result<(), String> {
+    let mut dek = crypto.0.lock().unwrap();
+    let mut conn = db.0.lock().unwrap();
+    *dek = None;
+    *conn = None;
     Ok(())
 }

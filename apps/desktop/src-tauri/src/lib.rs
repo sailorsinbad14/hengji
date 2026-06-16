@@ -19,6 +19,7 @@ pub fn run() {
             crypto::unlock,
             crypto::change_password,
             crypto::remove_password,
+            crypto::lock,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

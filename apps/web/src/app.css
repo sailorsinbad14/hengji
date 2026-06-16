@@ -356,3 +356,32 @@ input:focus, select:focus { outline: 2px solid var(--brand-50); border-color: va
   .stats { grid-template-columns: 1fr 1fr; }
   .mid { grid-template-columns: 1fr; }
 }
+
+/* —— 解锁屏（桌面已加密，bootstrap 门）—— */
+.lock-screen { display: grid; place-items: center; min-height: 100vh; background: var(--bg); padding: 24px; }
+.lock-card { width: 100%; max-width: 360px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 28px 24px; box-shadow: var(--shadow-sm); text-align: center; }
+.lock-brand { font-size: 22px; font-weight: 800; color: var(--ink); display: inline-flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.lock-brand .mark { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--brand); color: #fff; font-size: 16px; }
+.lock-sub { color: var(--ink-soft); font-size: 13px; margin-bottom: 16px; }
+.lock-input { margin-bottom: 10px; }
+.lock-btn { width: 100%; }
+.lock-err { color: var(--neg); font-size: 12.5px; margin-top: 12px; text-align: left; }
+.lock-err-block strong { display: block; margin-bottom: 4px; }
+.lock-err-block .small { color: var(--neg); opacity: 0.85; }
+.lock-foot { margin-top: 16px; text-align: left; }
+
+/* —— 设置 · 安全卡 —— */
+.sec-status { margin-bottom: 10px; }
+.sec-pill { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; }
+.sec-none { background: #eef1f5; color: var(--ink-soft); }
+.sec-strong { background: var(--brand-50); color: var(--brand-700); }
+.sec-warn { background: var(--biz-50); color: var(--biz); }
+.sec-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.sec-form { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-width: 320px; }
+.sec-form-btns { display: flex; gap: 10px; align-items: center; }
+.danger-btn { background: var(--neg); color: #fff; }
+.danger-btn:hover { background: #c93b40; }
+.sec-autolock { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.sec-autolock label { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.sec-autolock select { width: auto; }
+.sec-todo { margin-top: 12px; }

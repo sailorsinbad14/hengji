@@ -92,11 +92,16 @@ export class TauriSqlRepository implements Repository {
     private readonly now: Clock,
   ) {}
 
-  /** 打开（或创建）本地 SQLite、自动迁移 schema。path 形如 'sqlite:heng.db'，相对应用配置目录。 */
-  static async load(path = 'sqlite:heng.db', opts: { now?: Clock } = {}): Promise<TauriSqlRepository> {
-    // 阶段 1a：明文打开（不带 key）。WAL/外键/busy_timeout 已在 Rust 侧 db_open 内设置。
-    // 阶段 2 接入加密时，这里传入解出的 DEK 作为 key。
-    const db = await TauriDb.open(path);
+  /**
+   * 打开（或创建）本地 SQLite、自动迁移 schema。path 形如 'sqlite:heng.db'，相对应用配置目录。
+   * `encrypted=true`：库已加密，Rust 用已解锁 DEK（须先 unlock）开 SQLCipher 密文库；否则开明文。
+   * WAL/外键/busy_timeout 由 Rust 侧 db_open 设置。
+   */
+  static async load(
+    path = 'sqlite:heng.db',
+    opts: { now?: Clock; encrypted?: boolean } = {},
+  ): Promise<TauriSqlRepository> {
+    const db = await TauriDb.open(path, opts.encrypted ?? false);
     await migrate({
       run: async (sql) => {
         await db.execute(sql);

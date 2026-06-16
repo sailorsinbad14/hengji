@@ -8,7 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./sqlite": "./src/sqlite.ts",
-    "./tauri": "./src/tauri.ts"
+    "./tauri": "./src/tauri.ts",
+    "./crypto": "./src/crypto.ts"
   },
   "scripts": {
     "test": "vitest run",
