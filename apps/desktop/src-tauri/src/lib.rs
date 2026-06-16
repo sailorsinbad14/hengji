@@ -22,8 +22,7 @@ pub fn run() {
             crypto::remove_password,
             crypto::lock,
             crypto::export_backup,
-            crypto::set_destroy_enabled,
-            crypto::restart_after_destroy,
+            crypto::wipe_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

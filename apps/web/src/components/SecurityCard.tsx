@@ -7,8 +7,8 @@ import {
   pickBackupPath,
   removePassword,
   securityStatus,
-  setDestroyEnabled,
   setPassword,
+  wipeData,
 } from '@app/store/crypto';
 import type { SecurityStatus } from '@app/store/crypto';
 import { APP_SCOPE, AUTOLOCK_KEY, autoLockMinOf } from '../settings';
@@ -43,19 +43,22 @@ type Mode = 'idle' | 'set' | 'change' | 'remove';
 
 /**
  * 设置 →「安全」卡（仅桌面）。三态状态行（未加密 / 已加密·安全芯片强 / 已加密但芯片不可用·信封损坏）+
- * 设/改/移除密码 + 自动锁 + 备份导出（明文，关闭加密的等价物）+「错 N 次销毁」开关（默认关，强闸门：
- * 开启要求本会话内已成功备份）。口令由用户原生输入。set/remove 触发 Rust 侧明↔密库原子迁移。
+ * 设/改/移除密码 + 自动锁 + 备份导出（明文，关闭加密的等价物）+「清空数据」（用户主动、加密时需口令、二次确认）。
+ * 口令由用户原生输入。set/remove 触发 Rust 侧明↔密库原子迁移。
  */
 export default function SecurityCard({
   repo,
   settings,
   reload,
   onSecurityChange,
+  onWiped,
 }: {
   repo: Repository;
   settings: StoredSetting[];
   reload: () => Promise<void>;
   onSecurityChange: () => void;
+  /** 清空成功后通知 App 重开全新空库、回主界面。 */
+  onWiped: () => Promise<void>;
 }) {
   const [status, setStatus] = useState<SecurityStatus | null>(null);
   const [mode, setMode] = useState<Mode>('idle');
@@ -66,7 +69,10 @@ export default function SecurityCard({
   const [err, setErr] = useState<string | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
-  const [destroyMsg, setDestroyMsg] = useState<string | null>(null);
+  const [wipePw, setWipePw] = useState('');
+  const [wiping, setWiping] = useState(false);
+  const [wipeMsg, setWipeMsg] = useState<string | null>(null);
+  const [wipeMode, setWipeMode] = useState(false);
 
   async function refresh(): Promise<void> {
     try {
@@ -149,21 +155,35 @@ export default function SecurityCard({
     }
   }
 
-  async function doToggleDestroy(next: boolean): Promise<void> {
-    setDestroyMsg(null);
+  function startWipe(): void {
+    setWipeMsg(null);
+    setWipePw('');
+    setWipeMode(true);
+  }
+  function cancelWipe(): void {
+    setWipeMode(false);
+    setWipePw('');
+    setWipeMsg(null);
+  }
+  async function doWipe(): Promise<void> {
+    if (wiping) return;
+    setWipeMsg(null);
+    const enc = status?.encrypted ?? false;
+    if (enc && wipePw.length < 1) return setWipeMsg('请输入密码以确认是你本人。');
     if (
-      next &&
       !confirm(
-        `开启后，连续输错 ${status?.destroy_threshold ?? 5} 次密码将【永久销毁】全部账本——本机无法找回，只能从你导出的备份恢复。\n` +
-          `这等于把「删库」能力交给能碰这台电脑的人。确定开启？`,
+        '确定清空全部数据？这会【永久删除】所有账本、流水、设置，本机无法找回。\n建议先导出一份备份再清空。确定继续？',
       )
     )
       return;
+    setWiping(true);
     try {
-      await setDestroyEnabled(next);
-      await refresh();
+      await wipeData(enc ? wipePw : undefined); // Rust：加密时验口令 → 删信封+钥匙+库
+      cancelWipe();
+      await onWiped(); // App 重开全新空库、回主界面 → 本组件随之卸载；成功路径不再 setState
     } catch (e) {
-      setDestroyMsg(msgOf(e)); // 最常见：未在本会话内导出备份 → 提示先备份
+      setWipeMsg(msgOf(e)); // 加密时口令错 → WrongPassword
+      setWiping(false);
     }
   }
 
@@ -330,7 +350,7 @@ export default function SecurityCard({
         {status?.last_backup_path && <p className="muted small sec-backup-path">于 {status.last_backup_path}</p>}
         <p className="muted small">
           备份是<strong>关闭加密的等价物</strong>、不受密码保护——请存到 U 盘等离线介质、别和电脑放一起。
-          这也是忘记密码或数据被销毁后<strong>唯一</strong>能找回数据的途径。
+          这也是忘记密码后<strong>唯一</strong>能找回数据的途径。
         </p>
         {encrypted && status?.last_backup_path && (
           <p className="sec-warn-line small">⚠ 存在 1 份未加密备份于 {status.last_backup_path}</p>
@@ -338,28 +358,40 @@ export default function SecurityCard({
         {backupMsg && <p className="muted small">{backupMsg}</p>}
       </div>
 
-      {/* —— 错 N 次销毁（默认关 · 强闸门）—— */}
-      {strong && (
-        <div className="sec-destroy">
-          <label className="chkline">
-            <input
-              type="checkbox"
-              checked={status?.destroy_enabled ?? false}
-              onChange={(e) => void doToggleDestroy(e.target.checked)}
-            />
-            错 {status?.destroy_threshold ?? 5} 次密码自动销毁（默认关）
-          </label>
-          <p className="muted small">
-            开启后，连续输错 {status?.destroy_threshold ?? 5} 次密码会<strong>永久销毁全部账本</strong>
-            （删掉芯片里的封装密钥，本机无法找回，只能从备份恢复）。<strong>必须先在本次会话内导出一份备份</strong>才能开启。
-            这是把「删库」能力递给能物理碰这台电脑的人——按需谨慎开启。
-          </p>
-          {status?.destroy_enabled && (
-            <p className="sec-warn-line small">⚠ 已开启：连续输错 {status.destroy_threshold} 次将永久销毁全部账本、本机无法找回。</p>
-          )}
-          {destroyMsg && <p className="form-err">{destroyMsg}</p>}
-        </div>
-      )}
+      {/* —— 清空数据（用户主动 · 加密时需口令 · 二次确认）—— */}
+      <div className="sec-wipe">
+        {!wipeMode ? (
+          <button className="lnk danger" onClick={startWipe}>
+            清空全部数据…
+          </button>
+        ) : (
+          <div className="sec-form">
+            <p className="muted small">
+              <strong>永久删除</strong>本机全部账本、流水、设置（含加密钥匙），<strong>无法找回</strong>、只能从你导出的备份恢复。
+              {encrypted && '请输入当前密码确认是你本人。'}
+            </p>
+            {encrypted && (
+              <input
+                type="password"
+                placeholder="输入当前密码确认"
+                value={wipePw}
+                autoFocus
+                disabled={wiping}
+                onChange={(e) => setWipePw(e.target.value)}
+              />
+            )}
+            <div className="sec-form-btns">
+              <button className="btn danger-btn" disabled={wiping} onClick={() => void doWipe()}>
+                {wiping ? '清空中…' : '清空全部数据'}
+              </button>
+              <button className="nb-cancel" disabled={wiping} onClick={cancelWipe}>
+                取消
+              </button>
+            </div>
+            {wipeMsg && <p className="form-err">{wipeMsg}</p>}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -389,19 +389,4 @@ input:focus, select:focus { outline: 2px solid var(--brand-50); border-color: va
 .sec-backup-path { word-break: break-all; margin-bottom: 6px; }
 .sec-stale { color: var(--biz); font-weight: 600; }
 .sec-warn-line { color: var(--biz); background: var(--biz-50); padding: 6px 10px; border-radius: 8px; word-break: break-all; }
-.sec-destroy { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
-.sec-todo { margin-top: 12px; }
-
-/* —— 解锁屏：销毁倒计时 —— */
-.lock-destroy-warn { margin-top: 12px; color: var(--neg); background: #fdecec; padding: 8px 10px; border-radius: 8px; text-align: left; }
-.lock-stale { margin-top: 4px; color: var(--neg); font-weight: 600; }
-
-/* —— 销毁终态屏 —— */
-.destroyed-card { text-align: center; }
-.destroyed-mark { font-size: 36px; margin-bottom: 6px; }
-.destroyed-title { font-size: 17px; font-weight: 800; color: var(--neg); margin-bottom: 6px; }
-.destroyed-body { text-align: left; color: var(--ink-soft); margin: 12px 0; }
-.destroyed-body p { margin-bottom: 8px; }
-.destroyed-path { display: inline-block; margin-top: 4px; word-break: break-all; background: #eef1f5; padding: 2px 6px; border-radius: 6px; font-size: 12px; }
-.destroyed-restart { width: 100%; }
-.destroyed-confirm { margin-top: 10px; text-align: left; }
+.sec-wipe { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }

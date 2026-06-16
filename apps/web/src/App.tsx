@@ -8,7 +8,6 @@ import { customerOrderStatus, payableLedger } from './biz';
 import { advancedOn, autoLockMinOf, basisOf, convertCtxOf, currenciesOf, dueLeadOf, multiCurrencyOn, reconcileDayOf, reconcileLeadOf, reconcileTargetDate, reconcileWindowOpen } from './settings';
 import { lock as lockDb, securityStatus } from '@app/store/crypto';
 import UnlockScreen from './components/UnlockScreen';
-import DestroyedScreen from './components/DestroyedScreen';
 import OverviewAll from './views/OverviewAll';
 import Dashboard from './views/Dashboard';
 import Transactions from './views/Transactions';
@@ -107,10 +106,9 @@ export default function App() {
   const [reconDismissed, setReconDismissed] = useState<Set<string>>(new Set());
   const [dueDismissed, setDueDismissed] = useState<Set<string>>(new Set());
   const [apDueDismissed, setApDueDismissed] = useState<Set<string>>(new Set());
-  // 启动门（桌面加密）：'loading' 探测中 / 'locked' 解锁屏 / 'destroyed' 终态屏 / 'open' 已开库。浏览器演示恒 'open'。
-  const [gate, setGate] = useState<'loading' | 'locked' | 'destroyed' | 'open'>('loading');
+  // 启动门（桌面加密）：'loading' 探测中 / 'locked' 解锁屏 / 'open' 已开库。浏览器演示恒 'open'。
+  const [gate, setGate] = useState<'loading' | 'locked' | 'open'>('loading');
   const [encrypted, setEncrypted] = useState(false);
-  const [destroyedBackupPath, setDestroyedBackupPath] = useState<string | null>(null);
 
   async function loadFrom(r: Repository): Promise<void> {
     const [bk, a, t, b, s, os, cs, st, sup, fd] = await Promise.all([
@@ -152,13 +150,6 @@ export default function App() {
       }
       const st = await securityStatus();
       if (cancelled) return;
-      // 门判定序（must-fix #2）：destroyed → encrypted → plaintext。sentinel 必先于 encrypted，
-      // 否则中断的销毁（信封已删、库已隔离）会落到明文分支、静默造出空库。
-      if (st.destroyed) {
-        setDestroyedBackupPath(st.last_backup_path);
-        setGate('destroyed');
-        return;
-      }
       setEncrypted(st.encrypted);
       if (st.encrypted) {
         setGate('locked'); // 显解锁屏，待 unlock 成功再开库（见 openAfterUnlock）
@@ -183,22 +174,14 @@ export default function App() {
     setGate('open');
   }
 
-  // 第 N 次错口令触发了销毁（解锁屏回调）→ 取备份路径、切终态屏。
-  function handleDestroyed(): void {
-    void securityStatus().then((s) => {
-      setDestroyedBackupPath(s.last_backup_path);
-      setGate('destroyed');
-    });
-  }
-
-  // 终态屏「从空白重新开始」后：复位 repo 单例 → 开全新空明文库 → 进主界面。
-  async function handleRestarted(): Promise<void> {
+  // 用户在设置里「清空数据」成功后：复位 repo 单例 → 开全新空明文库 → 刷新主界面、回总表。
+  async function handleWiped(): Promise<void> {
     resetDesktopRepo();
     setEncrypted(false);
     const r = await openDesktopRepoOnce(false);
     await loadFrom(r);
     setRepo(r);
-    setGate('open');
+    setCur('all');
   }
 
   // 设/移除密码后刷新加密态（驱动自动锁开关 + 状态显示）。
@@ -325,8 +308,7 @@ export default function App() {
     return count > 0 ? { count, overdueCount, total } : null;
   }, [curBook, settings, suppliers, scoped.accounts, scoped.txns, convert]);
 
-  if (gate === 'destroyed') return <DestroyedScreen backupPath={destroyedBackupPath} onRestarted={handleRestarted} />;
-  if (gate === 'locked') return <UnlockScreen onUnlocked={openAfterUnlock} onDestroyed={handleDestroyed} />;
+  if (gate === 'locked') return <UnlockScreen onUnlocked={openAfterUnlock} />;
   if (!repo) return <div className="splash">账本加载中…</div>;
 
   function openBook(id: 'all' | string, type?: BookType): void {
@@ -455,6 +437,7 @@ export default function App() {
             usedCurrencies={new Set(liveAccounts.map((a) => a.currency))}
             reload={() => loadFrom(repo)}
             onSecurityChange={refreshSecurity}
+            onWiped={handleWiped}
           />
         ) : cur === RECONCILE ? (
           <Reconcile repo={repo} accounts={liveAccounts} allTxns={txns} books={allBooks} reload={() => loadFrom(repo)} />

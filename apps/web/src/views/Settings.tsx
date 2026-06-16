@@ -39,6 +39,7 @@ export default function Settings({
   usedCurrencies,
   reload,
   onSecurityChange,
+  onWiped,
 }: {
   repo: Repository;
   settings: StoredSetting[];
@@ -46,6 +47,8 @@ export default function Settings({
   reload: () => Promise<void>;
   /** 桌面加密状态变更（设/移除密码）后通知 App 刷新解锁门/自动锁状态。 */
   onSecurityChange: () => void;
+  /** 清空数据后通知 App 重开全新空库。 */
+  onWiped: () => Promise<void>;
 }) {
   const advanced = advancedOn(settings);
   const basis = basisOf(settings);
@@ -130,7 +133,7 @@ export default function Settings({
       </div>
 
       {isDesktop && (
-        <SecurityCard repo={repo} settings={settings} reload={reload} onSecurityChange={onSecurityChange} />
+        <SecurityCard repo={repo} settings={settings} reload={reload} onSecurityChange={onSecurityChange} onWiped={onWiped} />
       )}
 
       <div className="card">

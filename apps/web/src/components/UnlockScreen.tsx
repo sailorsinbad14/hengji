@@ -1,35 +1,16 @@
-import { useEffect, useState } from 'react';
-import { isCryptoError, securityStatus, unlock } from '@app/store/crypto';
-import type { CryptoError, SecurityStatus } from '@app/store/crypto';
+import { useState } from 'react';
+import { isCryptoError, unlock } from '@app/store/crypto';
+import type { CryptoError } from '@app/store/crypto';
 
 /**
  * 解锁屏（仅桌面已加密时，bootstrap 门在开库前渲染）。
  * 口令由用户在原生输入框输入，解锁成功（DEK 已存 Rust 侧）后回调 onUnlocked 让 App 开库。
  * 失败按分流（§5）：口令错可重试；数据损坏 / 芯片不可用 / 芯片锁定走专门提示、不诱导反复试错。
- * 开了销毁时显「再错 N 次永久销毁、已错 M 次」+ 备份超期大声警示；第 N 次触发销毁则回调 onDestroyed → 终态屏。
  */
-export default function UnlockScreen({
-  onUnlocked,
-  onDestroyed,
-}: {
-  onUnlocked: () => Promise<void>;
-  onDestroyed: () => void;
-}) {
+export default function UnlockScreen({ onUnlocked }: { onUnlocked: () => Promise<void> }) {
   const [pw, setPw] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<CryptoError | null>(null);
-  const [status, setStatus] = useState<SecurityStatus | null>(null);
-
-  async function refresh(): Promise<void> {
-    try {
-      setStatus(await securityStatus());
-    } catch {
-      /* 忽略 */
-    }
-  }
-  useEffect(() => {
-    void refresh();
-  }, []);
 
   async function submit(): Promise<void> {
     if (busy || !pw) return;
@@ -40,22 +21,10 @@ export default function UnlockScreen({
       setPw('');
       await onUnlocked(); // 开库 + 进入主界面（由 App 处理）
     } catch (e) {
-      const ce = isCryptoError(e) ? e : { class: 'Internal' as const, code: 0, message: String(e) };
-      if (ce.class === 'Destroyed') {
-        onDestroyed(); // 第 N 次错口令触发了销毁 → App 切终态屏
-        return;
-      }
-      setErr(ce);
+      setErr(isCryptoError(e) ? e : { class: 'Internal', code: 0, message: String(e) });
       setBusy(false);
-      void refresh(); // 刷新已错次数（销毁倒计时）
     }
   }
-
-  // 开了销毁的倒计时 + 备份超期警示
-  const remaining =
-    status?.destroy_enabled ? Math.max(0, status.destroy_threshold - status.fail_count) : null;
-  const backupDays =
-    status?.last_backup_unix != null ? Math.floor(Date.now() / 1000 - status.last_backup_unix) / 86400 : null;
 
   return (
     <div className="lock-screen">
@@ -80,15 +49,6 @@ export default function UnlockScreen({
           {busy ? '解锁中…' : '解锁'}
         </button>
         {err && <LockError err={err} />}
-        {remaining !== null && (
-          <div className="lock-destroy-warn small">
-            ⚠ 已开启「错 {status!.destroy_threshold} 次销毁」：再错 <strong>{remaining}</strong> 次将
-            <strong>永久销毁全部账本</strong>、本机无法找回。
-            {backupDays !== null && backupDays >= 7 && (
-              <div className="lock-stale">上次备份 {Math.floor(backupDays)} 天前——销毁将丢失此后的所有数据。</div>
-            )}
-          </div>
-        )}
         <p className="lock-foot muted small">忘记密码无法找回：钥匙锁在本机安全芯片里，没有后门。请确保你有备份。</p>
       </div>
     </div>
