@@ -10,7 +10,7 @@ import {
   orderRevenueEntry,
   orderTotal,
 } from '@app/core';
-import type { Account, Book, EntryInput, Order, Transaction } from '@app/core';
+import type { Account, Book, EntryInput, Order, StagingRow, Transaction } from '@app/core';
 import type { Clock, Repository } from '../src/index';
 
 export function fakeClock(): Clock {
@@ -697,6 +697,83 @@ export function runRepositoryContract(name: string, makeRepo: (now: Clock) => Re
       expect(await repo.getPluginDocument('d1')).toBeNull();
       expect((await repo.listPluginDocuments({ bookId: B2 })).map((x) => x.id)).toEqual(['d2']);
       await expect(repo.removePluginDocument('d1')).rejects.toThrow();
+    });
+  });
+
+  describe(`${name} · 导入复核台脊梁（staging）`, () => {
+    const mkRow = (over: Partial<StagingRow> & { id: string; batchId: string; bizNo: string }): StagingRow => ({
+      date: '2026-06-01',
+      datetime: '2026-06-01 12:00:00',
+      amountMinor: 10000,
+      direction: 'out',
+      payee: '商户',
+      counterpartyAccount: '',
+      note: '',
+      accountingType: '在线支付',
+      suggestion: 'expense',
+      assignedBookId: null,
+      assignedAccountId: null,
+      status: 'pending',
+      txnId: null,
+      ...over,
+    });
+
+    it('批次/行：批量插入 + 批次校验（整批原子）+ 状态机 + biz_no 去重/自愈', async () => {
+      const repo = await seed(makeRepo(fakeClock()));
+
+      // addStagingBatch 盖同步元数据、status 保留；重复抛错
+      const batch = await repo.addStagingBatch({ id: 'sb1', source: 'alipay-fund-flow', accountId: 'alipay', label: '6月.csv', status: 'reviewing' });
+      expect(batch.deleted).toBe(false);
+      expect(batch.createdAt.startsWith('2026-01-01')).toBe(true);
+      expect(batch.status).toBe('reviewing');
+      await expect(repo.addStagingBatch({ id: 'sb1', source: 'x', accountId: 'a', label: '', status: 'reviewing' })).rejects.toThrow();
+
+      // addStagingRows 批量插入：按入参顺序返回、默认 pending/txnId=null
+      const rows = await repo.addStagingRows([
+        mkRow({ id: 'sr1', batchId: 'sb1', bizNo: 'A001', suggestion: 'expense' }),
+        mkRow({ id: 'sr2', batchId: 'sb1', bizNo: 'A002', direction: 'in', suggestion: 'income' }),
+        mkRow({ id: 'sr3', batchId: 'sb1', bizNo: 'A003', suggestion: 'unknown', accountingType: '转账' }),
+      ]);
+      expect(rows.map((r) => r.id)).toEqual(['sr1', 'sr2', 'sr3']);
+      expect(rows.every((r) => r.status === 'pending' && r.txnId === null)).toBe(true);
+      expect(await repo.addStagingRows([])).toEqual([]); // 空数组安全
+
+      // 引用不存在批次 → 抛错且整批不写（srX 不得因 srBad 失败前已落而残留）
+      await expect(
+        repo.addStagingRows([mkRow({ id: 'srX', batchId: 'sb1', bizNo: 'A100' }), mkRow({ id: 'srBad', batchId: 'ghost', bizNo: 'A101' })]),
+      ).rejects.toThrow();
+      expect((await repo.listStagingRows({ batchId: 'sb1' })).map((r) => r.id).sort()).toEqual(['sr1', 'sr2', 'sr3']);
+
+      // 同批入参 id 重复 → 三实现一致抛错且整批不写（不静默覆盖/返回幽灵行）
+      await expect(
+        repo.addStagingRows([mkRow({ id: 'srDup', batchId: 'sb1', bizNo: 'A200' }), mkRow({ id: 'srDup', batchId: 'sb1', bizNo: 'A201' })]),
+      ).rejects.toThrow();
+      expect((await repo.listStagingRows({ batchId: 'sb1' })).map((r) => r.id).sort()).toEqual(['sr1', 'sr2', 'sr3']);
+
+      // listStagingRows status 过滤
+      expect((await repo.listStagingRows({ batchId: 'sb1', status: 'pending' })).length).toBe(3);
+      expect((await repo.listStagingRows({ status: 'posted' })).length).toBe(0);
+
+      // updateStagingRow：复核决定（指派账本/对手腿 + 落库回填 txnId + 置 posted）
+      const posted = await repo.updateStagingRow('sr1', { assignedBookId: B1, assignedAccountId: 'food', status: 'posted', txnId: 't-sr1' });
+      expect([posted.assignedBookId, posted.assignedAccountId, posted.status, posted.txnId]).toEqual([B1, 'food', 'posted', 't-sr1']);
+      // 只改 suggestion（unknown → transfer-out），其余字段保持
+      const fixed = await repo.updateStagingRow('sr3', { suggestion: 'transfer-out' });
+      expect(fixed.suggestion).toBe('transfer-out');
+      expect(fixed.status).toBe('pending');
+      await expect(repo.updateStagingRow('nope', { status: 'skipped' })).rejects.toThrow();
+
+      // biz_no 去重 / 落库中断自愈：查 posted 命中的 biz_no（A001 已落、A999 未见）
+      const postedByBiz = await repo.listStagingRows({ status: 'posted', bizNos: ['A001', 'A999'] });
+      expect(postedByBiz.map((r) => r.bizNo)).toEqual(['A001']);
+      expect(await repo.listStagingRows({ bizNos: [] })).toEqual([]); // 空 bizNos → 空结果（非全量）
+
+      // updateStagingBatch：状态机 reviewing → committed；list status 过滤
+      const committed = await repo.updateStagingBatch('sb1', { status: 'committed' });
+      expect(committed.status).toBe('committed');
+      expect((await repo.listStagingBatches({ status: 'reviewing' })).length).toBe(0);
+      expect((await repo.listStagingBatches({ status: 'committed' })).map((b) => b.id)).toEqual(['sb1']);
+      await expect(repo.updateStagingBatch('nope', { status: 'reverted' })).rejects.toThrow();
     });
   });
 

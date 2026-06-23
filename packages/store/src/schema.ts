@@ -1,4 +1,4 @@
-import type { Account, Book, FeeDefinition, FeeTier, InventoryKind, OrderLine, Posting, PurchaseKind, PurchaseLine, SettlementDirection, CounterpartyType, OrderStatus } from '@app/core';
+import type { Account, Book, Direction, DraftSuggestion, FeeDefinition, FeeTier, InventoryKind, OrderLine, Posting, PurchaseKind, PurchaseLine, SettlementDirection, StagingBatchStatus, StagingRowStatus, CounterpartyType, OrderStatus } from '@app/core';
 import type {
   StoredAccount,
   StoredBook,
@@ -10,6 +10,8 @@ import type {
   StoredPluginDocument,
   StoredProduct,
   StoredPurchase,
+  StoredStagingBatch,
+  StoredStagingRow,
   StoredSupplier,
   StoredReconciliation,
   StoredSetting,
@@ -359,6 +361,76 @@ export function toPluginDocument(r: PluginDocumentRow): StoredPluginDocument {
     docType: r.doc_type,
     data: parseDocData(r.data),
     txnIds: parseTags(r.txn_ids ?? '[]'),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deleted: r.deleted !== 0,
+  };
+}
+
+export interface StagingBatchRow {
+  id: string;
+  source: string;
+  account_id: string;
+  label: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  deleted: number;
+}
+
+export interface StagingRowRow {
+  id: string;
+  batch_id: string;
+  biz_no: string;
+  date: string;
+  datetime: string;
+  amount_minor: number;
+  direction: string;
+  payee: string;
+  counterparty_account: string;
+  note: string;
+  accounting_type: string;
+  suggestion: string;
+  assigned_book_id: string | null;
+  assigned_account_id: string | null;
+  status: string;
+  txn_id: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted: number;
+}
+
+export function toStagingBatch(r: StagingBatchRow): StoredStagingBatch {
+  return {
+    id: r.id,
+    source: r.source,
+    accountId: r.account_id,
+    label: r.label,
+    status: r.status as StagingBatchStatus,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deleted: r.deleted !== 0,
+  };
+}
+
+export function toStagingRow(r: StagingRowRow): StoredStagingRow {
+  return {
+    id: r.id,
+    batchId: r.batch_id,
+    bizNo: r.biz_no,
+    date: r.date,
+    datetime: r.datetime,
+    amountMinor: r.amount_minor,
+    direction: r.direction as Direction,
+    payee: r.payee,
+    counterpartyAccount: r.counterparty_account,
+    note: r.note,
+    accountingType: r.accounting_type,
+    suggestion: r.suggestion as DraftSuggestion,
+    assignedBookId: r.assigned_book_id,
+    assignedAccountId: r.assigned_account_id,
+    status: r.status as StagingRowStatus,
+    txnId: r.txn_id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     deleted: r.deleted !== 0,

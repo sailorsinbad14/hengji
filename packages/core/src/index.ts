@@ -10,6 +10,7 @@ export * from './reconcile';
 export * from './inventory';
 export * from './fees';
 export * from './plugin';
+export * from './staging';
 export * from './import/types';
 export * from './import/shared';
 export * from './import/alipay-fund-flow';

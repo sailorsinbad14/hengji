@@ -1,5 +1,5 @@
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Customer, FeeDefinition, InventoryMovement, Order, OrderStatus, PluginDocument, Product, Purchase, Reconciliation, Settlement, Supplier, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, FeeDefinition, InventoryMovement, Order, OrderStatus, PluginDocument, Product, Purchase, Reconciliation, Settlement, StagingBatch, StagingBatchStatus, StagingRow, StagingRowStatus, Supplier, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
@@ -11,6 +11,8 @@ import type {
   ProductPatch,
   PurchasePatch,
   Repository,
+  StagingBatchPatch,
+  StagingRowPatch,
   StoredAccount,
   StoredBook,
   StoredBudget,
@@ -24,6 +26,8 @@ import type {
   StoredReconciliation,
   StoredSetting,
   StoredSettlement,
+  StoredStagingBatch,
+  StoredStagingRow,
   StoredSupplier,
   StoredTransaction,
   SupplierPatch,
@@ -59,6 +63,8 @@ export class InMemoryRepository implements Repository {
   private readonly reconciliations = new Map<string, StoredReconciliation>();
   private readonly inventoryMovements = new Map<string, StoredInventoryMovement>();
   private readonly pluginDocuments = new Map<string, StoredPluginDocument>();
+  private readonly stagingBatches = new Map<string, StoredStagingBatch>();
+  private readonly stagingRows = new Map<string, StoredStagingRow>();
   private readonly now: Clock;
 
   constructor(opts: { now?: Clock } = {}) {
@@ -552,6 +558,78 @@ export class InMemoryRepository implements Repository {
     const d = this.pluginDocuments.get(id);
     if (!d || d.deleted) throw new Error(`插件单据不存在：${id}`);
     this.pluginDocuments.set(id, { ...d, deleted: true, updatedAt: this.now() });
+  }
+
+  // ---- 导入复核台脊梁（账单导入 增量1·②）----
+  private liveStagingBatch(id: string): StoredStagingBatch {
+    const b = this.stagingBatches.get(id);
+    if (!b || b.deleted) throw new Error(`导入批次不存在：${id}`);
+    return b;
+  }
+
+  async addStagingBatch(batch: StagingBatch): Promise<StoredStagingBatch> {
+    if (this.stagingBatches.has(batch.id)) throw new Error(`导入批次已存在：${batch.id}`);
+    const ts = this.now();
+    const stored: StoredStagingBatch = { ...clone(batch), createdAt: ts, updatedAt: ts, deleted: false };
+    this.stagingBatches.set(batch.id, stored);
+    return clone(stored);
+  }
+
+  async addStagingRows(rows: StagingRow[]): Promise<StoredStagingRow[]> {
+    // 先全量校验（批次存在 + id 不重复，含同批入参自撞），再写——避免半截写入、三实现行为一致
+    const seen = new Set<string>();
+    for (const r of rows) {
+      this.liveStagingBatch(r.batchId);
+      if (seen.has(r.id) || this.stagingRows.has(r.id)) throw new Error(`导入草稿行已存在：${r.id}`);
+      seen.add(r.id);
+    }
+    const ts = this.now();
+    const out: StoredStagingRow[] = [];
+    for (const r of rows) {
+      const stored: StoredStagingRow = { ...clone(r), createdAt: ts, updatedAt: ts, deleted: false };
+      this.stagingRows.set(r.id, stored);
+      out.push(clone(stored));
+    }
+    return out;
+  }
+
+  async listStagingBatches(query: { status?: StagingBatchStatus } = {}): Promise<StoredStagingBatch[]> {
+    const out: StoredStagingBatch[] = [];
+    for (const b of this.stagingBatches.values()) {
+      if (b.deleted) continue;
+      if (query.status && b.status !== query.status) continue;
+      out.push(clone(b));
+    }
+    return out;
+  }
+
+  async listStagingRows(query: { batchId?: string; status?: StagingRowStatus; bizNos?: string[] } = {}): Promise<StoredStagingRow[]> {
+    const bizSet = query.bizNos ? new Set(query.bizNos) : null;
+    const out: StoredStagingRow[] = [];
+    for (const r of this.stagingRows.values()) {
+      if (r.deleted) continue;
+      if (query.batchId && r.batchId !== query.batchId) continue;
+      if (query.status && r.status !== query.status) continue;
+      if (bizSet && !bizSet.has(r.bizNo)) continue;
+      out.push(clone(r));
+    }
+    return out;
+  }
+
+  async updateStagingBatch(id: string, patch: StagingBatchPatch): Promise<StoredStagingBatch> {
+    const b = this.stagingBatches.get(id);
+    if (!b || b.deleted) throw new Error(`导入批次不存在：${id}`);
+    const updated: StoredStagingBatch = { ...b, ...clone(patch), updatedAt: this.now() };
+    this.stagingBatches.set(id, updated);
+    return clone(updated);
+  }
+
+  async updateStagingRow(id: string, patch: StagingRowPatch): Promise<StoredStagingRow> {
+    const r = this.stagingRows.get(id);
+    if (!r || r.deleted) throw new Error(`导入草稿行不存在：${id}`);
+    const updated: StoredStagingRow = { ...r, ...clone(patch), updatedAt: this.now() };
+    this.stagingRows.set(id, updated);
+    return clone(updated);
   }
 
   // ---- 生意：库存出入库 ----

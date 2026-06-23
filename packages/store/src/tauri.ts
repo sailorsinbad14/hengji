@@ -1,6 +1,6 @@
 import { TauriDb } from './tauri-bridge';
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Customer, FeeDefinition, InventoryMovement, Order, OrderStatus, PluginDocument, Posting, Product, Purchase, Reconciliation, Settlement, Supplier, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, FeeDefinition, InventoryMovement, Order, OrderStatus, PluginDocument, Posting, Product, Purchase, Reconciliation, Settlement, StagingBatch, StagingBatchStatus, StagingRow, StagingRowStatus, Supplier, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
@@ -12,6 +12,8 @@ import type {
   ProductPatch,
   PurchasePatch,
   Repository,
+  StagingBatchPatch,
+  StagingRowPatch,
   StoredAccount,
   StoredBook,
   StoredBudget,
@@ -25,6 +27,8 @@ import type {
   StoredReconciliation,
   StoredSetting,
   StoredSettlement,
+  StoredStagingBatch,
+  StoredStagingRow,
   StoredSupplier,
   StoredTransaction,
   SupplierPatch,
@@ -49,6 +53,8 @@ import {
   toReconciliation,
   toSetting,
   toSettlement,
+  toStagingBatch,
+  toStagingRow,
   toSupplier,
   toTxn,
 } from './schema';
@@ -69,6 +75,8 @@ import type {
   ReconciliationRow,
   SettingRow,
   SettlementRow,
+  StagingBatchRow,
+  StagingRowRow,
   SupplierRow,
   TxnRow,
 } from './schema';
@@ -794,6 +802,117 @@ export class TauriSqlRepository implements Repository {
     const cur = await this.getPluginDocument(id);
     if (!cur) throw new Error(`插件单据不存在：${id}`);
     await this.db.execute('UPDATE plugin_documents SET deleted = 1, updated_at = $1 WHERE id = $2', [this.now(), id]);
+  }
+
+  // ---- 导入复核台脊梁（账单导入 增量1·②）----
+  private async assertStagingBatch(id: string): Promise<void> {
+    if (!(await this.exists('SELECT 1 FROM staging_batches WHERE id = $1 AND deleted = 0', [id]))) {
+      throw new Error(`导入批次不存在：${id}`);
+    }
+  }
+
+  private async getStagingBatch(id: string): Promise<StoredStagingBatch | null> {
+    const rows = await this.db.select<StagingBatchRow[]>('SELECT * FROM staging_batches WHERE id = $1 AND deleted = 0', [id]);
+    return rows[0] ? toStagingBatch(rows[0]) : null;
+  }
+
+  private async getStagingRow(id: string): Promise<StoredStagingRow | null> {
+    const rows = await this.db.select<StagingRowRow[]>('SELECT * FROM staging_rows WHERE id = $1 AND deleted = 0', [id]);
+    return rows[0] ? toStagingRow(rows[0]) : null;
+  }
+
+  async addStagingBatch(batch: StagingBatch): Promise<StoredStagingBatch> {
+    if (await this.exists('SELECT 1 FROM staging_batches WHERE id = $1', [batch.id])) throw new Error(`导入批次已存在：${batch.id}`);
+    const ts = this.now();
+    await this.db.execute(
+      'INSERT INTO staging_batches (id, source, account_id, label, status, created_at, updated_at, deleted) VALUES ($1, $2, $3, $4, $5, $6, $7, 0)',
+      [batch.id, batch.source, batch.accountId, batch.label, batch.status, ts, ts],
+    );
+    return (await this.getStagingBatch(batch.id))!;
+  }
+
+  async addStagingRows(rows: StagingRow[]): Promise<StoredStagingRow[]> {
+    if (rows.length === 0) return [];
+    // 批量前置校验（批次存在 + id 不重复，含同批入参自撞），再一把事务写入——半截不写、三实现行为一致
+    const seen = new Set<string>();
+    for (const r of rows) {
+      await this.assertStagingBatch(r.batchId);
+      if (seen.has(r.id) || (await this.exists('SELECT 1 FROM staging_rows WHERE id = $1', [r.id]))) throw new Error(`导入草稿行已存在：${r.id}`);
+      seen.add(r.id);
+    }
+    const ts = this.now();
+    await this.db.batch(
+      rows.map((r) => ({
+        sql: `INSERT INTO staging_rows (id, batch_id, biz_no, date, datetime, amount_minor, direction, payee, counterparty_account, note, accounting_type, suggestion, assigned_book_id, assigned_account_id, status, txn_id, created_at, updated_at, deleted)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 0)`,
+        params: [r.id, r.batchId, r.bizNo, r.date, r.datetime, r.amountMinor, r.direction, r.payee, r.counterpartyAccount, r.note, r.accountingType, r.suggestion, r.assignedBookId, r.assignedAccountId, r.status, r.txnId, ts, ts],
+      })),
+    );
+    const out: StoredStagingRow[] = [];
+    for (const r of rows) out.push((await this.getStagingRow(r.id))!);
+    return out;
+  }
+
+  async listStagingBatches(query: { status?: StagingBatchStatus } = {}): Promise<StoredStagingBatch[]> {
+    const cond = ['deleted = 0'];
+    const params: unknown[] = [];
+    if (query.status) {
+      params.push(query.status);
+      cond.push(`status = $${params.length}`);
+    }
+    const rows = await this.db.select<StagingBatchRow[]>(`SELECT * FROM staging_batches WHERE ${cond.join(' AND ')}`, params);
+    return rows.map(toStagingBatch);
+  }
+
+  async listStagingRows(query: { batchId?: string; status?: StagingRowStatus; bizNos?: string[] } = {}): Promise<StoredStagingRow[]> {
+    const base = ['deleted = 0'];
+    const baseParams: unknown[] = [];
+    if (query.batchId) {
+      baseParams.push(query.batchId);
+      base.push(`batch_id = $${baseParams.length}`);
+    }
+    if (query.status) {
+      baseParams.push(query.status);
+      base.push(`status = $${baseParams.length}`);
+    }
+    if (query.bizNos) {
+      if (query.bizNos.length === 0) return [];
+      // 分片避免 IN 占位符超 SQLite 变量上限
+      const out: StoredStagingRow[] = [];
+      for (const part of chunk(query.bizNos, 500)) {
+        const params = [...baseParams];
+        const ph = part
+          .map((b) => {
+            params.push(b);
+            return `$${params.length}`;
+          })
+          .join(', ');
+        const rows = await this.db.select<StagingRowRow[]>(`SELECT * FROM staging_rows WHERE ${base.join(' AND ')} AND biz_no IN (${ph})`, params);
+        out.push(...rows.map(toStagingRow));
+      }
+      return out;
+    }
+    const rows = await this.db.select<StagingRowRow[]>(`SELECT * FROM staging_rows WHERE ${base.join(' AND ')}`, baseParams);
+    return rows.map(toStagingRow);
+  }
+
+  async updateStagingBatch(id: string, patch: StagingBatchPatch): Promise<StoredStagingBatch> {
+    const cur = await this.getStagingBatch(id);
+    if (!cur) throw new Error(`导入批次不存在：${id}`);
+    const next: StoredStagingBatch = { ...cur, ...patch, updatedAt: this.now() };
+    await this.db.execute('UPDATE staging_batches SET label=$1, status=$2, updated_at=$3 WHERE id=$4', [next.label, next.status, next.updatedAt, id]);
+    return (await this.getStagingBatch(id))!;
+  }
+
+  async updateStagingRow(id: string, patch: StagingRowPatch): Promise<StoredStagingRow> {
+    const cur = await this.getStagingRow(id);
+    if (!cur) throw new Error(`导入草稿行不存在：${id}`);
+    const next: StoredStagingRow = { ...cur, ...patch, updatedAt: this.now() };
+    await this.db.execute(
+      'UPDATE staging_rows SET assigned_book_id=$1, assigned_account_id=$2, suggestion=$3, status=$4, txn_id=$5, updated_at=$6 WHERE id=$7',
+      [next.assignedBookId, next.assignedAccountId, next.suggestion, next.status, next.txnId, next.updatedAt, id],
+    );
+    return (await this.getStagingRow(id))!;
   }
 
   // ---- 生意：代采采购单（C2d）----
