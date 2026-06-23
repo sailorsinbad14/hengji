@@ -211,4 +211,11 @@ describe('review 修复回归（解析鲁棒 + 记账安全）', () => {
     const r = parseAlipayFundFlow(csvOf(dataRow({ exp: '50.00', oppAcc: 'self***@bank' })));
     expect(r.rows[0]!.counterpartyAccount).toBe('self***@bank');
   });
+
+  it('含签名词的前言行不被误判为表头（真表头在后仍被找到）', () => {
+    const preamble = '本报表包含入账时间 账务类型 支付宝交易号 等列';
+    const csv = ['#x', preamble, HEADER, dataRow({ exp: '50.00' })].join('\n');
+    const r = parseAlipayFundFlow(csv);
+    expect(r.rows.length).toBe(1);
+  });
 });

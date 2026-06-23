@@ -1,4 +1,5 @@
 import { toMinor } from '../money';
+import { normalizeDateString, parseAmountCell } from './shared';
 import type { DraftSuggestion, Direction, ImportDraftRow, ImportMeta, ImportParseResult } from './types';
 
 /**
@@ -72,19 +73,6 @@ export function suggestFromType(accountingType: string, direction: Direction): D
   }
 }
 
-/**
- * 金额字符串 → 主单位**绝对值**。
- * - 空 / 单空格 → 0（合法零，表示该列无值）；
- * - 非空但非数字 → `NaN`（交上层告警跳过，不静默当 0 吞）。
- * 取绝对值：列名已隐含方向（`支出（-元）`），某些导出会写负号，符号无意义且若不剥会漏单。
- */
-function parseAmount(s: string): number {
-  const t = s.replace(/[,\s]/g, '');
-  if (t === '') return 0;
-  if (!/^-?\d+(\.\d+)?$/.test(t)) return NaN;
-  return Math.abs(parseFloat(t));
-}
-
 /** 引号感知的 CSV 行切分（RFC4180：支持 "…" 包裹、""转义、字段内逗号）。 */
 function splitCsvLine(line: string): string[] {
   const out: string[] = [];
@@ -108,16 +96,6 @@ function splitCsvLine(line: string): string[] {
   }
   out.push(cur);
   return out;
-}
-
-/** 归一化时间戳：接受空格或 T 分隔、单/双位月日、秒可缺。失败返回 null。 */
-function normalizeDatetime(s: string): { date: string; datetime: string } | null {
-  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(s);
-  if (!m) return null;
-  const pad = (x: string) => x.padStart(2, '0');
-  const date = `${m[1]}-${pad(m[2]!)}-${pad(m[3]!)}`;
-  const datetime = `${date} ${pad(m[4]!)}:${m[5]}:${m[6] ?? '00'}`;
-  return { date, datetime };
 }
 
 /** 剥除行/文档首的 UTF-8 BOM（U+FEFF）；解码/重存环节易混入，会让首行 `#`/表头失配。 */
@@ -161,10 +139,10 @@ interface ColMap {
   bizDesc: number;
 }
 
-/** 一行 fields 是否像表头：须同含「入账时间 + 账务类型 + 支付宝交易号」三个签名列（防杂行误判为表头）。 */
+/** 一行 fields 是否像表头：须有三个**独立单元格**分别 startsWith 入账时间/账务类型/支付宝交易号（防含这些词的前言整句被误判）。 */
 function looksLikeHeader(fields: string[]): boolean {
-  const has = (kw: string) => fields.some((f) => f.includes(kw));
-  return has('入账时间') && has('账务类型') && has('支付宝交易号');
+  const hasCol = (kw: string) => fields.some((f) => f.replace(/\s/g, '').startsWith(kw));
+  return hasCol('入账时间') && hasCol('账务类型') && hasCol('支付宝交易号');
 }
 
 /**
@@ -226,14 +204,14 @@ export function parseAlipayFundFlow(text: string): ImportParseResult {
     const get = (i: number): string => (i >= 0 ? (fields[i] ?? '').trim() : '');
 
     const bizNo = get(cols.bizNo);
-    const dt = normalizeDatetime(get(cols.date));
+    const dt = normalizeDateString(get(cols.date));
     if (!bizNo || !dt) {
       warnings.push(`跳过无交易号 / 日期形态不符的行：${bizNo || line.slice(0, 40)}`);
       continue;
     }
 
-    const incomeVal = parseAmount(get(cols.income));
-    const expenseVal = parseAmount(get(cols.expense));
+    const incomeVal = parseAmountCell(get(cols.income));
+    const expenseVal = parseAmountCell(get(cols.expense));
     if (Number.isNaN(incomeVal) || Number.isNaN(expenseVal)) {
       warnings.push(`收/支金额无法解析，跳过：${bizNo}`);
       continue;

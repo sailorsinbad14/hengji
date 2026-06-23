@@ -11,4 +11,6 @@ export * from './inventory';
 export * from './fees';
 export * from './plugin';
 export * from './import/types';
+export * from './import/shared';
 export * from './import/alipay-fund-flow';
+export * from './import/wechat-bill';
