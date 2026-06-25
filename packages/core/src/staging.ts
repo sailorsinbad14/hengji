@@ -93,6 +93,12 @@ export function stagingRowToEntry(
   if (decision.accountId === sourceAccountId) {
     throw new Error('对手腿账户不能等于源账户');
   }
+  // 红线：日期必须合法（YYYY-MM-DD）才落库。CSV/xlsx 解析器恒产合法日期，但 OCR 草稿可能日期未识别（date=''）——
+  // 空/非法日期落库会生成「无日期交易」：仍计入账户余额，却从所有按月（预算/收支）视图静默消失。此处兜死，
+  // 任何调用方（含复核台）都不得落无日期交易；OCR 行须先在复核台补填合法日期。
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(row.date)) {
+    throw new Error('草稿行日期非法（应为 YYYY-MM-DD），不得落库；请在复核台补填日期');
+  }
   const base = { bookId: decision.bookId, date: row.date, amount: row.amountMinor, payee: row.payee, note: row.note, tags: [] as string[] };
   switch (decision.kind) {
     case 'income':

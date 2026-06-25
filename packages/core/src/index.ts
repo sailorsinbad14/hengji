@@ -15,3 +15,4 @@ export * from './import/types';
 export * from './import/shared';
 export * from './import/alipay-fund-flow';
 export * from './import/wechat-bill';
+export * from './import/ocr';
