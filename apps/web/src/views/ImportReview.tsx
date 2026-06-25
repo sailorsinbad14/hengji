@@ -14,12 +14,21 @@ import {
 import type { CounterpartyMemory } from '../import';
 import { parseImportFile, SOURCE_LABELS } from '../import-files';
 import type { ImportSource } from '../import-files';
+import { parseOcrImageFile } from '../import-ocr';
+import { isDesktop } from '../db';
+
+/** 批次来源标签：账单文件源走 SOURCE_LABELS；OCR 图片识别另立。 */
+const srcLabel = (s: string): string => (s === 'ocr' ? '图片识别（OCR）' : (SOURCE_LABELS[s as ImportSource] ?? s));
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 type Kind = StagingPostDecision['kind'];
 interface RowDecision {
   bookId: string;
   kind: Kind | '';
   accountId: string;
+  /** 可编辑日期（OCR 草稿可能未识别日期；落库前须为合法 YYYY-MM-DD）。 */
+  date: string;
 }
 
 const KIND_OPTS: Array<[Kind, string]> = [
@@ -103,7 +112,7 @@ export default function ImportReview({
 
   function setDec(rowId: string, patch: Partial<RowDecision>): void {
     setDecisions((d) => {
-      const cur = d[rowId] ?? { bookId: '', kind: '', accountId: '' };
+      const cur = d[rowId] ?? { bookId: '', kind: '', accountId: '', date: '' };
       const next: RowDecision = { ...cur, ...patch };
       // 改 kind / 账本 → 旧科目可能不在新选项里，清空待重选
       if ((patch.kind !== undefined && patch.kind !== cur.kind) || (patch.bookId !== undefined && patch.bookId !== cur.bookId)) {
@@ -144,6 +153,37 @@ export default function ImportReview({
     }
   }
 
+  /** 上传单笔截图 → 本地 OCR 起草（desktop-only）→ 同一复核台。OCR 粗、warnings 多，落库前人工逐笔核对。 */
+  async function onOcrFile(e: React.ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!srcAccount) {
+      setMsg('请先选择导入到哪个全局账户。');
+      return;
+    }
+    setBusy(true);
+    try {
+      const parsed = await parseOcrImageFile(file);
+      if (parsed.rows.length === 0) {
+        setMsg(`未能从图片识别出单笔记录：${parsed.warnings.join('；') || '请确认上传的是单笔账单 / 收款详情截图。'}`);
+      } else {
+        const res = await createImportBatch(repo, { source: 'ocr', accountId: srcAccount, label: `图片识别·${file.name}` }, parsed.rows);
+        if (!res.batch) {
+          setMsg('这张图识别到的记录此前已导入过，无新增。');
+        } else {
+          setMsg(`图片识别出 ${res.added} 笔待复核。${parsed.warnings.length ? `提示：${parsed.warnings.join('；')}` : ''}`);
+          await openBatch(res.batch);
+        }
+      }
+      await refreshBatches();
+    } catch (err) {
+      setMsg(`图片识别失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function openBatch(b: StoredStagingBatch): Promise<void> {
     const r = await repo.listStagingRows({ batchId: b.id, status: 'pending' });
     const m = await loadCounterpartyMemory(repo);
@@ -162,7 +202,7 @@ export default function ImportReview({
       if (accountId && !accountsFor(kind, bookId, b.accountId).some((a) => a.id === accountId)) {
         accountId = '';
       }
-      init[row.id] = { kind, bookId, accountId };
+      init[row.id] = { kind, bookId, accountId, date: row.date };
     }
     setActive(b);
     setRows(r);
@@ -170,7 +210,7 @@ export default function ImportReview({
   }
 
   function complete(d: RowDecision | undefined): boolean {
-    return !!d && !!d.kind && !!d.bookId && !!d.accountId;
+    return !!d && !!d.kind && !!d.bookId && !!d.accountId && ISO_DATE.test(d.date);
   }
   const assignedCount = rows.filter((r) => complete(decisions[r.id])).length;
 
@@ -184,7 +224,8 @@ export default function ImportReview({
       const d = decisions[row.id];
       if (!complete(d)) continue;
       try {
-        await postStagingRow(repo, active, row, { kind: d!.kind as Kind, bookId: d!.bookId, accountId: d!.accountId });
+        // 用复核台编辑后的日期落库（OCR 可能未识别日期 → 用户补填；core stagingRowToEntry 兜死非法日期）。
+        await postStagingRow(repo, active, { ...row, date: d!.date }, { kind: d!.kind as Kind, bookId: d!.bookId, accountId: d!.accountId });
         posted++;
         if (d!.kind === 'income' || d!.kind === 'expense') remembers.push({ payee: row.payee, bookId: d!.bookId, accountId: d!.accountId });
       } catch {
@@ -234,6 +275,7 @@ export default function ImportReview({
             还没有「全局账户」。请到任一账本的「账户」页，把你的支付宝 / 微信 / 银行卡设为全局账户，再回来导入。
           </p>
         ) : (
+          <>
           <div className="brow" style={{ flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
             <select value={source} onChange={(e) => setSource(e.target.value as ImportSource)}>
               {(Object.keys(SOURCE_LABELS) as ImportSource[]).map((s) => (
@@ -252,6 +294,14 @@ export default function ImportReview({
             </select>
             <input type="file" accept={source === 'wechat-bill' ? '.xlsx' : '.csv,.txt'} disabled={busy} onChange={(e) => void onFile(e)} />
           </div>
+          {isDesktop && (
+            <div className="brow" style={{ flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 8, borderTop: '1px solid var(--line, #eee)', paddingTop: 8 }}>
+              <span className="muted small">单笔截图（本地识别）</span>
+              <input type="file" accept="image/*" disabled={busy} onChange={(e) => void onOcrFile(e)} />
+              <span className="muted small">支付 / 收款详情截图 → 本地 OCR 起草，复核后入账（不上传云端）</span>
+            </div>
+          )}
+          </>
         )}
         {msg && <p className="small" style={{ marginTop: 8 }}>{msg}</p>}
       </div>
@@ -263,7 +313,7 @@ export default function ImportReview({
             <div className="brow" key={b.id} style={{ alignItems: 'center' }}>
               <span className="chip">{b.status === 'committed' ? '已入账' : '复核中'}</span>
               <span style={{ flex: 1 }}>
-                {b.label} <span className="muted small">· {SOURCE_LABELS[b.source as ImportSource] ?? b.source}</span>
+                {b.label} <span className="muted small">· {srcLabel(b.source)}</span>
               </span>
               {b.status === 'reviewing' && (
                 <button className="lnk" onClick={() => void openBatch(b)}>
@@ -288,12 +338,12 @@ export default function ImportReview({
           ) : (
             <>
               {rows.map((row) => {
-                const d = decisions[row.id] ?? { bookId: '', kind: '', accountId: '' };
+                const d = decisions[row.id] ?? { bookId: '', kind: '', accountId: '', date: row.date };
                 const acctOpts = accountsFor(d.kind, d.bookId, active.accountId);
                 const amt = row.direction === 'out' ? -row.amountMinor : row.amountMinor;
                 return (
                   <div key={row.id} className="brow" style={{ flexWrap: 'wrap', gap: 6, alignItems: 'center', borderTop: '1px solid var(--line, #eee)', paddingTop: 8 }}>
-                    <span className="muted small" style={{ width: 84 }}>{row.date}</span>
+                    <input type="date" value={d.date} onChange={(e) => setDec(row.id, { date: e.target.value })} style={{ width: 132 }} title="记账日期（可改）" />
                     <span style={{ flex: 1, minWidth: 120 }}>
                       {row.payee || <span className="muted">（无对方）</span>}
                       {row.note && <span className="muted small"> · {row.note}</span>}
