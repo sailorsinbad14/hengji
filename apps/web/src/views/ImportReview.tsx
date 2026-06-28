@@ -87,7 +87,7 @@ export default function ImportReview({
   const [active, setActive] = useState<StoredStagingBatch | null>(null);
   const [rows, setRows] = useState<StoredStagingRow[]>([]);
   const [decisions, setDecisions] = useState<Record<string, RowDecision>>({});
-  const [, setMem] = useState<CounterpartyMemory>({});
+  const [mem, setMem] = useState<CounterpartyMemory>({});
 
   useEffect(() => {
     if (!srcAccount && globalAccounts[0]) setSrcAccount(globalAccounts[0].id);
@@ -204,6 +204,7 @@ export default function ImportReview({
       }
       init[row.id] = { kind, bookId, accountId, date: row.date };
     }
+    setMem(m); // 与「套用同类全填」共用同一记忆快照（本批开台即载入）
     setActive(b);
     setRows(r);
     setDecisions(init);
@@ -213,6 +214,60 @@ export default function ImportReview({
     return !!d && !!d.kind && !!d.bookId && !!d.accountId && ISO_DATE.test(d.date);
   }
   const assignedCount = rows.filter((r) => complete(decisions[r.id])).length;
+
+  /**
+   * 顶部「套用同类全填」：把本批每条**未完成**待复核行的 账本 + 对手腿账户，用「同一对方」的模板填上。
+   * 模板优先取**本批已填好的同名行**（用户刚教的一行 → 首批也能铺），其次取**持久对方记忆**（重复导入自动套）。
+   * 红线：类型恒按账单解析器（不读记忆）→ 划转方向永不被翻转；账户须在该类型+账本下合法才填；
+   * 绝不覆盖用户已填的字段或已完整的行。空对方名跳过。
+   */
+  function fillSameCounterparty(): void {
+    if (!active) return;
+    // 本批同名模板：对方(trim) → 某条「完整」决定的 {bookId, accountId}（取首条命中）
+    const tpl = new Map<string, { bookId: string; accountId: string }>();
+    for (const row of rows) {
+      const d = decisions[row.id];
+      const p = row.payee.trim();
+      if (p && complete(d) && !tpl.has(p)) tpl.set(p, { bookId: d!.bookId, accountId: d!.accountId });
+    }
+    const next: Record<string, RowDecision> = { ...decisions };
+    let filled = 0;
+    let hadIncomplete = false;
+    for (const row of rows) {
+      const cur: RowDecision = next[row.id] ?? { bookId: '', kind: '', accountId: '', date: row.date };
+      if (complete(cur)) continue; // 不动已填好的行
+      hadIncomplete = true;
+      // 类型恒取解析器（或用户已选），不读记忆 → 划转方向永不被翻转（红线）。
+      // 解析器拿不准的「待定」行（转账/红包，kind=''）整行跳过：缺类型无法选对手账户，半填只会误导。
+      const kind = cur.kind || defaultKind(row.suggestion, row.direction);
+      if (!kind) continue;
+      const p = row.payee.trim();
+      if (!p) continue;
+      const t = tpl.get(p) ?? recallCounterparty(mem, row.payee);
+      if (!t) continue;
+      // 只对「模板注入」的字段做合法性校验，不碰用户已填的字段（避免误清；自防御、不依赖别处的 UI 不变量）。
+      let bookId = cur.bookId;
+      if (!bookId && t.bookId && books.some((b) => b.id === t.bookId)) bookId = t.bookId;
+      let accountId = cur.accountId;
+      // 注入账户须有账本、且在「该类型+账本」下合法（划转排除源账户、收支须该账本科目）——防记忆/同名跨类型错填、防无账本裸账户。
+      if (!accountId && bookId && t.accountId && accountsFor(kind, bookId, active.accountId).some((a) => a.id === t.accountId)) {
+        accountId = t.accountId;
+      }
+      if (kind !== cur.kind || bookId !== cur.bookId || accountId !== cur.accountId) {
+        next[row.id] = { ...cur, kind, bookId, accountId };
+        filled++;
+      }
+    }
+    setDecisions(next);
+    const remaining = rows.filter((r) => !complete(next[r.id])).length;
+    if (filled > 0) {
+      setMsg(`已按同名 / 历史记忆套用 ${filled} 行（类型仍按账单，账户已校验）${remaining ? `，仍有 ${remaining} 行待指派` : ''}。`);
+    } else if (!hadIncomplete) {
+      setMsg('本批待复核行都已指派，无需套用。');
+    } else {
+      setMsg('没有可套用的同名行或历史记忆，请手动指派。');
+    }
+  }
 
   async function postAll(): Promise<void> {
     if (!active) return;
@@ -227,7 +282,11 @@ export default function ImportReview({
         // 用复核台编辑后的日期落库（OCR 可能未识别日期 → 用户补填；core stagingRowToEntry 兜死非法日期）。
         await postStagingRow(repo, active, { ...row, date: d!.date }, { kind: d!.kind as Kind, bookId: d!.bookId, accountId: d!.accountId });
         posted++;
-        if (d!.kind === 'income' || d!.kind === 'expense') remembers.push({ payee: row.payee, bookId: d!.bookId, accountId: d!.accountId });
+        // 记住「对方 → 账本 + 对手腿账户」：四种类型都记（含内部划转的对手资金账户），下次导入自动预填——P2 持久对方记忆。
+        // 类型不入记忆（恒按账单解析器定），故划转方向永不被记忆翻转（红线）。
+        // v1 取舍：记忆按对方单槽、后写覆盖（见 import.ts）——同一对方既划转又收支时后者覆盖前者的预填，
+        // 仅影响预填便利、不影响记账正确（错腿账户会被 openBatch/套用 的合法性校验清掉，绝不错记）。
+        remembers.push({ payee: row.payee, bookId: d!.bookId, accountId: d!.accountId });
       } catch {
         failed++;
       }
@@ -333,6 +392,12 @@ export default function ImportReview({
           <h3>
             复核：{active.label} <span className="muted small">（{rows.length} 笔待指派）</span>
           </h3>
+          {rows.length > 0 && (
+            <div className="brow" style={{ alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <button className="lnk" disabled={busy} onClick={() => fillSameCounterparty()}>套用同类全填</button>
+              <span className="muted small">按本批同名对方 / 历史记忆，补上未指派行的账本与对手账户（类型仍按账单）。</span>
+            </div>
+          )}
           {rows.length === 0 ? (
             <p className="muted small">本批没有待复核的草稿行。</p>
           ) : (
