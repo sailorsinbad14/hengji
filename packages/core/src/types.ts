@@ -65,6 +65,12 @@ export interface Transaction {
   /** 维度标签（自由扩展；生意/个人之分已由账本承担） */
   tags: string[];
   postings: Posting[];
+  /**
+   * 关联订单（M18a）：订单完成时生成的全部分录（确认收入 / 库存出库 COGS / 代采成本结转）都打此标记，
+   * 撤销订单时 `listTransactions({orderId})` 一把捞全（含此前无处可查的代采结转孤儿分录）。
+   * 缺省/null = 非订单完成分录（手记/收款核销/进货等）。
+   */
+  orderId?: string | null;
 }
 
 export interface Budget {

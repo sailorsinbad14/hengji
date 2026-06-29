@@ -54,6 +54,8 @@ export interface TxnRow {
   payee: string;
   note: string;
   tags: string;
+  /** 关联订单（M18a）：订单完成生成的分录回填；其余 NULL。撤销订单据此一把捞。 */
+  order_id: string | null;
   created_at: string;
   updated_at: string;
   deleted: number;
@@ -557,6 +559,7 @@ export function toTxn(r: TxnRow, postings: Posting[]): StoredTransaction {
     note: r.note,
     tags: parseTags(r.tags),
     postings,
+    orderId: r.order_id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     deleted: r.deleted !== 0,

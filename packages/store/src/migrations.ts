@@ -29,6 +29,9 @@
  * - m17：导入复核台脊梁（账单导入 增量1·②）。staging_batches（一次导入的批次：来源/源账户/状态）+
  *   staging_rows（逐笔草稿行：标准化字段 + 复核决定）。通用 staging——将来对账/OCR/语音/AI 复用，
  *   但列只放导入现用的。biz_no 建索引：再导去重 + 落库中断自愈。纯新增表，不动既有数据。
+ * - m18：撤销原语地基（账单导入 增量2·M18a）。transactions 加 order_id 列——订单完成时生成的
+ *   收入/COGS/代采结转分录都回填，撤销订单时一把捞全（解决代采结转分录无处可查的孤儿引用）。
+ *   既有交易默认 NULL（=非订单完成分录）；纯新增列，不动既有数据。
  */
 
 export interface SqlRunner {
@@ -392,7 +395,11 @@ const M17: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_staging_rows_bizno ON staging_rows(biz_no)`,
 ];
 
-export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12, M13, M14, M15, M16, M17];
+// m18：撤销原语地基（账单导入 增量2·M18a）。transactions.order_id 标记订单完成生成的分录（收入/COGS/代采结转），
+// 撤销订单据此一把捞全（含此前无处可查的代采结转孤儿）。既有交易回落 NULL；纯新增列。
+const M18: string[] = [`ALTER TABLE transactions ADD COLUMN order_id TEXT`];
+
+export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12, M13, M14, M15, M16, M17, M18];
 
 export async function migrate(r: SqlRunner): Promise<void> {
   const v = await r.getVersion();

@@ -1,4 +1,4 @@
-import { accountBalance, allocateCustomerPayments, collectionEntry, computeFees, convertAmount, creditPurchaseEntry, expandEntry, feesTotal, inventoryState, lineTotal, orderRevenueEntry, orderTotal, planInventoryIssue, purchaseTotal, supplierPaymentEntry } from '@app/core';
+import { accountBalance, allocateCustomerPayments, collectionEntry, computeFees, convertAmount, creditPurchaseEntry, expandEntry, feesTotal, inventoryState, lineTotal, orderRevenueEntry, orderTotal, planInventoryIssue, purchaseTotal, removalIsTail, reversalEntry, supplierPaymentEntry } from '@app/core';
 import type { AccountType, ConvertCtx, Customer, CustomerPayment, FeeDefinition, FeeLine, FeeResult, IssuePlanLine, Order, OrderLine, OrderPaymentStatus, OrderStatus, PurchaseLine, Supplier } from '@app/core';
 import type { Repository, StoredAccount, StoredBook, StoredCustomer, StoredInventoryMovement, StoredOrder, StoredProduct, StoredPurchase, StoredSettlement, StoredTransaction } from '@app/store';
 import { genId } from './db';
@@ -336,7 +336,7 @@ export async function completeOrder(repo: Repository, book: StoredBook, order: O
     { bookId: book.id, date: order.date, amount: total, currency: order.currency, receivableAccountId: arId, revenueAccountId: revenue.id, payee: customer.name, note: order.note },
     genId,
   );
-  await repo.addTransaction(entry);
+  await repo.addTransaction({ ...entry, orderId: order.id }); // M18a：打 order_id 标记，撤单一把捞
 
   // ② 库存出库 COGS：借营业成本 / 贷库存商品（CNY 本位），并按拆行记 out 出库流水
   if (plan.inventoryCogs > 0) {
@@ -346,7 +346,7 @@ export async function completeOrder(repo: Repository, book: StoredBook, order: O
       { kind: 'expense', bookId: book.id, date: order.date, amount: plan.inventoryCogs, currency: 'CNY', accountId: invId, categoryId: cogsId, payee: customer.name, note: '成本结转' },
       genId,
     );
-    await repo.addTransaction(cogsEntry);
+    await repo.addTransaction({ ...cogsEntry, orderId: order.id }); // M18a：order_id 标记
     for (const iss of plan.issues) {
       await repo.addInventoryMovement({
         id: genId(),
@@ -371,10 +371,92 @@ export async function completeOrder(repo: Repository, book: StoredBook, order: O
       { kind: 'expense', bookId: book.id, date: order.date, amount: dropshipCost, currency: 'CNY', accountId: wipId, categoryId: cogsId, payee: customer.name, note: '代采成本结转' },
       genId,
     );
-    await repo.addTransaction(dsEntry);
+    await repo.addTransaction({ ...dsEntry, orderId: order.id }); // M18a：代采结转分录打 order_id，撤单可定位（原孤儿）
   }
 
   await repo.updateOrder(order.id, { status: 'completed', revenueTxnId: entry.id });
+}
+
+// —— 撤销原语（账单导入 增量2）：与创建函数对偶。范式＝软删为主 + 已对账(cleared)红冲（用户拍板）。 ——
+
+/**
+ * 反向一笔已落库交易（增量2 撤销范式）：
+ * - 未对账（无 cleared posting）→ 软删（softDeleteTransaction，余额/应收等派生量自动回退）。
+ * - 已对账（任一 posting cleared）→ 红冲（追加等额反向分录、原分录不动，落 `date` 当期；保留审计轨迹、
+ *   不回改已完成对账的历史期间）。
+ * 交易已不在则幂等跳过（撤销可重入）。须在 repo.transaction 内调用以保证与父记录撤销原子。
+ */
+async function reverseTxn(repo: Repository, txnId: string, date: string, label: string): Promise<void> {
+  const txn = await repo.getTransaction(txnId);
+  if (!txn) return; // 幂等：已软删/不存在
+  if (txn.postings.some((p) => p.cleared)) {
+    const rev = reversalEntry(txn, { date, payee: txn.payee, note: `${label}：冲销${txn.note ? ' ' + txn.note : ''}` }, genId);
+    await repo.addTransaction(rev);
+  } else {
+    await repo.softDeleteTransaction(txnId);
+  }
+}
+
+/**
+ * 撤销一笔收/付款核销（对偶 recordCollection / recordSupplierPayment）：反向其核销分录（软删或红冲）
+ * + 软删 Settlement。FIFO 摊应收/应付实时回放，软删后自动回退、无需 unwind。核销纯分录、不碰库存。原子。
+ */
+export async function removeSettlement(repo: Repository, settlementId: string, opts: { date: string }): Promise<void> {
+  const s = await repo.getSettlement(settlementId);
+  if (!s) throw new Error('核销记录不存在或已撤销');
+  await repo.transaction(async () => {
+    if (s.txnId) await reverseTxn(repo, s.txnId, opts.date, '撤销核销');
+    await repo.softDeleteSettlement(settlementId);
+  });
+}
+
+/**
+ * 撤销一张「已完成」订单的完成动作（对偶 completeOrder）：反向收入/COGS/代采结转三类分录（M18a：order_id
+ * 一把捞，含此前无处可查的代采结转孤儿）+ 软删该单库存出库流水 + 订单退回「待发货」。
+ * 库存口径＝末端约束（用户拍板）：该单出库须是各受影响商品时间线的末尾，否则拒绝、引导用盘点 adjust 纠错。
+ * 护栏：有未撤销的收款核销时拒绝（先撤收款，避免留指向未完成单的孤儿核销）。原子。
+ */
+export async function revertOrderCompletion(repo: Repository, book: StoredBook, orderId: string, opts: { date: string }): Promise<void> {
+  const order = await repo.getOrder(orderId);
+  if (!order) throw new Error('订单不存在');
+  if (order.status !== 'completed') throw new Error('只有已完成订单可撤销完成');
+  // 护栏：先撤收款再撤完成
+  if ((await repo.listSettlements({ orderId })).length > 0) {
+    throw new Error('该订单已有收款核销，请先撤销收款，再撤销订单完成');
+  }
+  // 末端约束：该单出库须是各受影响商品时间线的末尾（移动加权下撤中间笔会致账证脱钩）
+  const outs = await repo.listInventoryMovements({ bookId: book.id, orderId });
+  for (const pid of [...new Set(outs.map((m) => m.productId))]) {
+    const all = await repo.listInventoryMovements({ bookId: book.id, productId: pid });
+    const removeIds = new Set(outs.filter((m) => m.productId === pid).map((m) => m.id));
+    if (!removalIsTail(all, removeIds)) {
+      const prod = await repo.getProduct(pid);
+      throw new Error(`商品「${prod?.name ?? pid}」在此单之后已有新的进出库，无法安全撤销完成；请改用库存盘点(adjust)纠错`);
+    }
+  }
+  await repo.transaction(async () => {
+    for (const t of await repo.listTransactions({ bookId: book.id, orderId })) {
+      await reverseTxn(repo, t.id, opts.date, '撤销订单完成');
+    }
+    for (const m of outs) await repo.softDeleteInventoryMovement(m.id);
+    await repo.updateOrder(orderId, { status: 'pending_ship', revenueTxnId: null });
+  });
+}
+
+/**
+ * 删除整张订单（对偶 saveOrder）：已完成先 revertOrderCompletion，再退该单草稿采购单、软删订单。原子。
+ * 护栏：有已确认采购（已记账）时拒绝——先撤采购（其撤销不在本期范围）。
+ */
+export async function removeOrder(repo: Repository, book: StoredBook, orderId: string, opts: { date: string }): Promise<void> {
+  const order = await repo.getOrder(orderId);
+  if (!order) throw new Error('订单不存在');
+  const purchases = await repo.listPurchases({ bookId: book.id, orderId });
+  if (purchases.some((p) => p.txnId)) throw new Error('该订单有已确认采购，请先撤销采购单，再删除订单');
+  await repo.transaction(async () => {
+    if (order.status === 'completed') await revertOrderCompletion(repo, book, orderId, opts);
+    for (const p of purchases) await repo.removePurchase(p.id); // 此时全为草稿（txnId=null）
+    await repo.softDeleteOrder(orderId);
+  });
 }
 
 /** 记一笔收款：钱从应收/客户(订单币种)转入同币种收款资产账户，并落 Settlement 记录。 */

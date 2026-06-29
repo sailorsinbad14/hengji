@@ -92,6 +92,8 @@ const defaultClock: Clock = () => new Date().toISOString();
 export class SqliteRepository implements Repository {
   private readonly db: DatabaseSync;
   private readonly now: Clock;
+  /** 当前事务嵌套深度（>0 即在事务内）：让内部 tx() 与外层 transaction() 复用同一把 BEGIN，不嵌套。 */
+  private txDepth = 0;
 
   constructor(path = ':memory:', opts: { now?: Clock } = {}) {
     this.now = opts.now ?? defaultClock;
@@ -114,7 +116,9 @@ export class SqliteRepository implements Repository {
   }
 
   private tx<T>(fn: () => T): T {
+    if (this.txDepth > 0) return fn(); // 已在事务内：复用外层 BEGIN，不嵌套
     this.db.exec('BEGIN');
+    this.txDepth++;
     try {
       const r = fn();
       this.db.exec('COMMIT');
@@ -122,6 +126,25 @@ export class SqliteRepository implements Repository {
     } catch (e) {
       this.db.exec('ROLLBACK');
       throw e;
+    } finally {
+      this.txDepth--;
+    }
+  }
+
+  /** 跨方法原子事务（增量2）：BEGIN → await fn → COMMIT；fn 抛错 ROLLBACK。可重入（嵌套并入外层）。 */
+  async transaction<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.txDepth > 0) return fn();
+    this.db.exec('BEGIN');
+    this.txDepth++;
+    try {
+      const r = await fn();
+      this.db.exec('COMMIT');
+      return r;
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    } finally {
+      this.txDepth--;
     }
   }
 
@@ -249,10 +272,10 @@ export class SqliteRepository implements Repository {
     this.tx(() => {
       this.db
         .prepare(
-          `INSERT INTO transactions (id, book_id, date, payee, note, tags, created_at, updated_at, deleted)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          `INSERT INTO transactions (id, book_id, date, payee, note, tags, order_id, created_at, updated_at, deleted)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
         )
-        .run(txn.id, txn.bookId, txn.date, txn.payee, txn.note, JSON.stringify(txn.tags), ts, ts);
+        .run(txn.id, txn.bookId, txn.date, txn.payee, txn.note, JSON.stringify(txn.tags), txn.orderId ?? null, ts, ts);
       this.insertPostings(txn.id, txn.postings);
     });
     return (await this.getTransaction(txn.id))!;
@@ -296,6 +319,10 @@ export class SqliteRepository implements Repository {
     if (query.accountId) {
       cond.push('EXISTS (SELECT 1 FROM postings p WHERE p.txn_id = t.id AND p.account_id = ?)');
       params.push(query.accountId);
+    }
+    if (query.orderId) {
+      cond.push('t.order_id = ?');
+      params.push(query.orderId);
     }
     const sql = `SELECT t.* FROM transactions t WHERE ${cond.join(' AND ')} ORDER BY t.date DESC, t.created_at DESC, t.id DESC`;
     let rows = this.db.prepare(sql).all(...params) as unknown as TxnRow[];
@@ -601,6 +628,13 @@ export class SqliteRepository implements Repository {
     return (await this.getOrder(id))!;
   }
 
+  async softDeleteOrder(id: string): Promise<void> {
+    if (!this.db.prepare('SELECT 1 FROM orders WHERE id = ? AND deleted = 0').get(id)) {
+      throw new Error(`订单不存在：${id}`);
+    }
+    this.db.prepare('UPDATE orders SET deleted = 1, updated_at = ? WHERE id = ?').run(this.now(), id);
+  }
+
   // ---- 生意：收款 ----
   async addSettlement(settlement: Settlement): Promise<StoredSettlement> {
     if (this.db.prepare('SELECT 1 FROM settlements WHERE id = ?').get(settlement.id)) {
@@ -647,11 +681,18 @@ export class SqliteRepository implements Repository {
     return (await this.getSettlement(settlement.id))!;
   }
 
-  private async getSettlement(id: string): Promise<StoredSettlement | null> {
+  async getSettlement(id: string): Promise<StoredSettlement | null> {
     const r = this.db.prepare('SELECT * FROM settlements WHERE id = ? AND deleted = 0').get(id) as
       | SettlementRow
       | undefined;
     return r ? toSettlement(r) : null;
+  }
+
+  async softDeleteSettlement(id: string): Promise<void> {
+    if (!this.db.prepare('SELECT 1 FROM settlements WHERE id = ? AND deleted = 0').get(id)) {
+      throw new Error(`收款不存在：${id}`);
+    }
+    this.db.prepare('UPDATE settlements SET deleted = 1, updated_at = ? WHERE id = ?').run(this.now(), id);
   }
 
   async listSettlements(
@@ -1061,6 +1102,13 @@ export class SqliteRepository implements Repository {
       .prepare(`SELECT * FROM inventory_movements WHERE ${cond.join(' AND ')} ORDER BY date DESC, created_at DESC, id DESC`)
       .all(...params) as unknown as InventoryMovementRow[];
     return rows.map(toInventoryMovement);
+  }
+
+  async softDeleteInventoryMovement(id: string): Promise<void> {
+    if (!this.db.prepare('SELECT 1 FROM inventory_movements WHERE id = ? AND deleted = 0').get(id)) {
+      throw new Error(`库存流水不存在：${id}`);
+    }
+    this.db.prepare('UPDATE inventory_movements SET deleted = 1, updated_at = ? WHERE id = ?').run(this.now(), id);
   }
 
   // ---- 设置（KV）----

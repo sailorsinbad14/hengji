@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { inventoryState, currentAvgCost, issueCost, planInventoryIssue } from '../src/index';
+import { inventoryState, currentAvgCost, issueCost, planInventoryIssue, removalIsTail } from '../src/index';
 import type { InventoryMovement, IssuePlanLine } from '../src/index';
 
 const B = 'b1';
@@ -74,6 +74,40 @@ describe('inventory 移动加权均价', () => {
     // 盘盈 +5 @ 80 → 15 个、值 ¥1200、均价不变
     const gain = inventoryState([mv('2026-06-01', 10, 8000), mv('2026-06-03', 5, 8000, 'adjust')]);
     expect(gain).toEqual({ qty: 15, totalCost: 120000, avgCost: 8000 });
+  });
+});
+
+describe('removalIsTail 末端约束（增量2 撤销）', () => {
+  it('撤末笔 → true；撤中间/最早笔 → false', () => {
+    const m1 = mv('2026-06-01', 10, 8000);
+    const m2 = mv('2026-06-02', -3, 8000);
+    const m3 = mv('2026-06-03', -2, 8000);
+    const all = [m1, m2, m3];
+    expect(removalIsTail(all, new Set([m3.id]))).toBe(true); // 末笔
+    expect(removalIsTail(all, new Set([m2.id]))).toBe(false); // 中间（m3 在其后）
+    expect(removalIsTail(all, new Set([m1.id]))).toBe(false); // 最早
+  });
+
+  it('撤连续末尾后缀（多笔）→ true；夹中间保留 → false', () => {
+    const m1 = mv('2026-06-01', 10, 8000);
+    const m2 = mv('2026-06-02', -3, 8000);
+    const m3 = mv('2026-06-03', -2, 8000);
+    expect(removalIsTail([m1, m2, m3], new Set([m2.id, m3.id]))).toBe(true); // 后缀
+    expect(removalIsTail([m1, m2, m3], new Set([m1.id, m3.id]))).toBe(false); // m2 夹在中间被保留
+  });
+
+  it('撤全部 → true；空集合 → true（平凡安全）', () => {
+    const m1 = mv('2026-06-01', 10, 8000);
+    const m2 = mv('2026-06-02', -3, 8000);
+    expect(removalIsTail([m1, m2], new Set([m1.id, m2.id]))).toBe(true);
+    expect(removalIsTail([m1, m2], new Set())).toBe(true);
+  });
+
+  it('出库后又有进货(restock) → 撤该出库 false（其后有保留流水，与录入顺序无关）', () => {
+    const out = mv('2026-06-02', -3, 8000);
+    const restockLater = mv('2026-06-05', 10, 9000);
+    const inEarly = mv('2026-06-01', 10, 8000);
+    expect(removalIsTail([out, restockLater, inEarly], new Set([out.id]))).toBe(false);
   });
 });
 

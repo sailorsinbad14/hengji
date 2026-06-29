@@ -1,10 +1,45 @@
 import { describe, it, expect } from 'vitest';
-import { expandEntry, forexEntry, isBalanced, assertBalanced, balanceOf, toMinor } from '../src/index';
+import { expandEntry, forexEntry, isBalanced, assertBalanced, balanceOf, reversalEntry, toMinor } from '../src/index';
+import type { Transaction } from '../src/index';
 
 function counter(): () => string {
   let n = 0;
   return () => `id${++n}`;
 }
+
+describe('reversalEntry 红冲（增量2 撤销）', () => {
+  it('逐腿取反、原交易不动、平衡、新 id/日期、不带 cleared', () => {
+    const gen = counter(); // src 与 rev 共用一个计数器，id 不撞
+    const src = expandEntry(
+      { kind: 'transfer', bookId: 'b1', date: '2026-05-05', amount: 50000, fromAccountId: 'ar', toAccountId: 'bank' },
+      gen,
+    );
+    // 模拟原交易某腿已对账
+    src.postings[0]!.cleared = true;
+    const rev = reversalEntry(src, { date: '2026-06-29', payee: '客户', note: '冲销收款' }, gen);
+    expect(isBalanced(rev.postings)).toBe(true);
+    expect(rev.id).not.toBe(src.id);
+    expect(rev.date).toBe('2026-06-29'); // 落撤销当期，不回改历史
+    expect(rev.bookId).toBe('b1');
+    // 每条腿金额恰为原腿相反数（按账户配对）
+    for (const sp of src.postings) {
+      const rp = rev.postings.find((p) => p.accountId === sp.accountId)!;
+      expect(rp.amount).toBe(-sp.amount);
+      expect(rp.cleared).toBeUndefined(); // 冲正未对账
+    }
+  });
+
+  it('多币种逐腿取反仍按币种平衡（豁免求和=0）', () => {
+    const src = forexEntry(
+      { bookId: 'b1', date: '2026-05-05', fromAccountId: 'usd', fromAmount: 10000, fromCurrency: 'USD', toAccountId: 'cny', toAmount: 72000, toCurrency: 'CNY' },
+      counter(),
+    );
+    const rev: Transaction = reversalEntry(src, { date: '2026-06-29' }, counter());
+    expect(isBalanced(rev.postings)).toBe(true);
+    expect(rev.postings.find((p) => p.accountId === 'usd')!.amount).toBe(10000); // 原 -10000 → +10000
+    expect(rev.postings.find((p) => p.accountId === 'cny')!.amount).toBe(-72000);
+  });
+});
 
 describe('expandEntry', () => {
   it('expense: 费用科目 +amount，资产账户 -amount，且平衡', () => {

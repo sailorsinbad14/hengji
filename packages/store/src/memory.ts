@@ -71,6 +71,34 @@ export class InMemoryRepository implements Repository {
     this.now = opts.now ?? defaultClock;
   }
 
+  /** 所有数据表（固定顺序）——transaction 快照/还原用。 */
+  private allMaps(): Map<string, unknown>[] {
+    return [
+      this.books, this.accounts, this.txns, this.budgets, this.customers, this.suppliers,
+      this.orders, this.settlements, this.products, this.feeDefinitions, this.purchases,
+      this.settings, this.reconciliations, this.inventoryMovements, this.pluginDocuments,
+      this.stagingBatches, this.stagingRows,
+    ] as Map<string, unknown>[];
+  }
+
+  /**
+   * 跨方法原子事务（增量2）：快照所有表 → 运行 fn → 失败则整体还原。依赖写操作走「整体替换」语义
+   * （map.set 替换值，非原地改）——撤销编排不用 setPostingsCleared（唯一原地改），故安全。
+   */
+  async transaction<T>(fn: () => Promise<T>): Promise<T> {
+    const maps = this.allMaps();
+    const snap = maps.map((m) => new Map(m));
+    try {
+      return await fn();
+    } catch (e) {
+      maps.forEach((m, i) => {
+        m.clear();
+        for (const [k, v] of snap[i]!) m.set(k, v);
+      });
+      throw e;
+    }
+  }
+
   // ---- books ----
   async addBook(book: Book): Promise<StoredBook> {
     if (this.books.has(book.id)) throw new Error(`账本已存在：${book.id}`);
@@ -158,7 +186,8 @@ export class InMemoryRepository implements Repository {
     assertBalanced(txn.postings);
     this.assertSameBook(txn);
     const ts = this.now();
-    const stored: StoredTransaction = { ...clone(txn), createdAt: ts, updatedAt: ts, deleted: false };
+    // orderId 归一化为 null（M18a）：与 SQLite NULL 列读出一致，三实现行为统一。
+    const stored: StoredTransaction = { ...clone(txn), orderId: txn.orderId ?? null, createdAt: ts, updatedAt: ts, deleted: false };
     this.txns.set(txn.id, stored);
     return clone(stored);
   }
@@ -177,6 +206,7 @@ export class InMemoryRepository implements Repository {
       if (query.to && t.date > query.to) continue;
       if (query.tag && !t.tags.includes(query.tag)) continue;
       if (query.accountId && !t.postings.some((p) => p.accountId === query.accountId)) continue;
+      if (query.orderId && t.orderId !== query.orderId) continue;
       out.push(clone(t));
     }
     out.sort((a, b) => {
@@ -196,6 +226,9 @@ export class InMemoryRepository implements Repository {
     const updated: StoredTransaction = {
       ...clone(txn),
       id, // 保持 id 稳定
+      // order_id 不随普通编辑改动（SQLite updateTransaction 的 UPDATE 不写 order_id，保留原值）；
+      // 入参未带 orderId 时沿用既有值，三实现一致。
+      orderId: txn.orderId !== undefined ? txn.orderId : (existing.orderId ?? null),
       createdAt: existing.createdAt,
       updatedAt: this.now(),
       deleted: false,
@@ -371,6 +404,12 @@ export class InMemoryRepository implements Repository {
     return clone(updated);
   }
 
+  async softDeleteOrder(id: string): Promise<void> {
+    const o = this.orders.get(id);
+    if (!o || o.deleted) throw new Error(`订单不存在：${id}`);
+    this.orders.set(id, { ...o, deleted: true, updatedAt: this.now() });
+  }
+
   // ---- 生意：收款 ----
   async addSettlement(settlement: Settlement): Promise<StoredSettlement> {
     if (this.settlements.has(settlement.id)) throw new Error(`收款已存在：${settlement.id}`);
@@ -405,6 +444,17 @@ export class InMemoryRepository implements Repository {
       out.push(clone(s));
     }
     return sortByDateDesc(out);
+  }
+
+  async getSettlement(id: string): Promise<StoredSettlement | null> {
+    const s = this.settlements.get(id);
+    return s && !s.deleted ? clone(s) : null;
+  }
+
+  async softDeleteSettlement(id: string): Promise<void> {
+    const s = this.settlements.get(id);
+    if (!s || s.deleted) throw new Error(`收款不存在：${id}`);
+    this.settlements.set(id, { ...s, deleted: true, updatedAt: this.now() });
   }
 
   // ---- 生意：代采采购单（C2d）----
@@ -657,6 +707,12 @@ export class InMemoryRepository implements Repository {
       out.push(clone(m));
     }
     return sortByDateDesc(out);
+  }
+
+  async softDeleteInventoryMovement(id: string): Promise<void> {
+    const m = this.inventoryMovements.get(id);
+    if (!m || m.deleted) throw new Error(`库存流水不存在：${id}`);
+    this.inventoryMovements.set(id, { ...m, deleted: true, updatedAt: this.now() });
   }
 
   // ---- 设置（KV）----

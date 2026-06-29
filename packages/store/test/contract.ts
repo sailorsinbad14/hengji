@@ -248,6 +248,60 @@ export function runRepositoryContract(name: string, makeRepo: (now: Clock) => Re
       );
       await expect(repo.updateTransaction(t.id, moved)).rejects.toThrow(/不可移动/);
     });
+
+    it('M18a：order_id 往返 + listTransactions({orderId}) 过滤 + 缺省归 null + update 保留', async () => {
+      const repo = makeRepo(fakeClock());
+      await repo.addBook(books[0]!);
+      await repo.addAccount(accounts[0]!); // bank B1
+      await repo.addAccount(accounts[4]!); // food B1
+      const mk = (id: string, orderId?: string | null): Transaction => ({
+        id,
+        bookId: B1,
+        date: '2026-05-01',
+        payee: '',
+        note: '',
+        tags: [],
+        postings: [
+          { id: `${id}-a`, txnId: id, accountId: 'food', amount: 1000, currency: 'CNY' },
+          { id: `${id}-b`, txnId: id, accountId: 'bank', amount: -1000, currency: 'CNY' },
+        ],
+        ...(orderId !== undefined ? { orderId } : {}),
+      });
+      await repo.addTransaction(mk('to1', 'ord-1'));
+      await repo.addTransaction(mk('to2', 'ord-1'));
+      const plain = await repo.addTransaction(mk('tp')); // 不带 orderId
+      expect(plain.orderId).toBeNull(); // 缺省归一化为 null（三实现一致）
+      expect((await repo.getTransaction('to1'))!.orderId).toBe('ord-1');
+      // 过滤：仅该单两笔，不含 plain
+      expect((await repo.listTransactions({ orderId: 'ord-1' })).map((t) => t.id).sort()).toEqual(['to1', 'to2']);
+      // 普通编辑（替换不带 orderId）不抹 order_id 标记
+      expect((await repo.updateTransaction('to1', mk('to1')))!.orderId).toBe('ord-1');
+    });
+
+    it('transaction：提交全落 / 抛错整体回滚（增量2 原子事务，含内部 addTransaction 不嵌套事务）', async () => {
+      const repo = await seed(makeRepo(fakeClock())); // seed B1 有 4 笔
+      // 提交：事务内建账本 + 落一笔交易（addTransaction 内部用 tx()/applyWrites，验证不嵌套 BEGIN）
+      await repo.transaction(async () => {
+        await repo.addBook({ id: 'bk-x', name: 'X', type: 'personal', archived: false });
+        await repo.addTransaction(
+          expandEntry({ kind: 'expense', bookId: B1, date: '2026-05-09', amount: 1000, accountId: 'bank', categoryId: 'food' }, counter('tx')),
+        );
+      });
+      expect(await repo.getBook('bk-x')).not.toBeNull();
+      expect((await repo.listTransactions({ bookId: B1 })).length).toBe(5); // 4 + 1
+      // 回滚：fn 中途抛错 → 已写的账本 + 交易都撤销
+      await expect(
+        repo.transaction(async () => {
+          await repo.addBook({ id: 'bk-y', name: 'Y', type: 'personal', archived: false });
+          await repo.addTransaction(
+            expandEntry({ kind: 'expense', bookId: B1, date: '2026-05-09', amount: 2000, accountId: 'bank', categoryId: 'food' }, counter('rb')),
+          );
+          throw new Error('boom');
+        }),
+      ).rejects.toThrow('boom');
+      expect(await repo.getBook('bk-y')).toBeNull(); // 回滚
+      expect((await repo.listTransactions({ bookId: B1 })).length).toBe(5); // 仍是 5，第二笔被回滚
+    });
   });
 
   describe(`${name} · 与 core 报表集成`, () => {
@@ -491,6 +545,30 @@ export function runRepositoryContract(name: string, makeRepo: (now: Clock) => Re
       const t2 = await repo.listTransactions({ bookId: B2 });
       expect(accountBalance(t2, 'b2ar')).toBe(150000);
     });
+
+    it('撤销原语（增量2）：getSettlement + softDeleteSettlement / softDeleteOrder 读路径排除 + 重复删抛错', async () => {
+      const repo = await seed(makeRepo(fakeClock()));
+      await repo.addCustomer(cust('cu1', B2, '张三'));
+      await repo.addOrder({
+        id: 'o1', bookId: B2, customerId: 'cu1', date: '2026-06-10', currency: 'CNY',
+        status: 'completed', note: '', revenueTxnId: null,
+        lines: [{ id: 'l1', orderId: 'o1', name: 'A货', qty: 1, unitPrice: 250000, productId: null }],
+      });
+      await repo.addSettlement({
+        id: 's1', bookId: B2, direction: 'in', counterpartyType: 'customer', counterpartyId: 'cu1',
+        orderId: 'o1', amount: 100000, date: '2026-06-11', accountId: 'b2bank', note: '', txnId: null,
+      });
+      expect((await repo.getSettlement('s1'))!.amount).toBe(100000); // 新公开读
+      await repo.softDeleteSettlement('s1');
+      expect(await repo.getSettlement('s1')).toBeNull();
+      expect((await repo.listSettlements({ orderId: 'o1' })).length).toBe(0);
+      await expect(repo.softDeleteSettlement('s1')).rejects.toThrow(); // 重复删
+      await expect(repo.softDeleteSettlement('nope')).rejects.toThrow(); // 不存在
+      await repo.softDeleteOrder('o1');
+      expect(await repo.getOrder('o1')).toBeNull();
+      expect((await repo.listOrders({ bookId: B2 })).length).toBe(0);
+      await expect(repo.softDeleteOrder('o1')).rejects.toThrow();
+    });
   });
 
   describe(`${name} · 商品（C1）`, () => {
@@ -665,6 +743,20 @@ export function runRepositoryContract(name: string, makeRepo: (now: Clock) => Re
       await expect(
         repo.addInventoryMovement({ id: 'm3', bookId: B1, productId: 'p1', date: '2026-06-03', kind: 'in', qty: 1, unitCost: 8000, orderId: null, txnId: null, note: '' }),
       ).rejects.toThrow();
+    });
+
+    it('撤销原语（增量2）：softDeleteInventoryMovement → inventoryState 回放排除 + 重复删抛错', async () => {
+      const repo = await seed(makeRepo(fakeClock()));
+      await repo.addProduct(prod('p1', B2, 'A型工具', 8000, 12500, true));
+      await repo.addInventoryMovement({ id: 'm1', bookId: B2, productId: 'p1', date: '2026-06-01', kind: 'in', qty: 10, unitCost: 8000, orderId: null, txnId: 't1', note: '进货' });
+      await repo.addInventoryMovement({ id: 'm2', bookId: B2, productId: 'p1', date: '2026-06-02', kind: 'out', qty: -3, unitCost: 8000, orderId: 'o1', txnId: 't2', note: '' });
+      // 撤末笔出库（其后无 movement）→ 回放回到出库前 {qty10, cost80000, avg8000}
+      await repo.softDeleteInventoryMovement('m2');
+      const all = await repo.listInventoryMovements({ bookId: B2, productId: 'p1' });
+      expect(all.map((m) => m.id)).toEqual(['m1']);
+      expect(inventoryState(all)).toEqual({ qty: 10, totalCost: 80000, avgCost: 8000 });
+      await expect(repo.softDeleteInventoryMovement('m2')).rejects.toThrow();
+      await expect(repo.softDeleteInventoryMovement('nope')).rejects.toThrow();
     });
   });
 
