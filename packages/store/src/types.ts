@@ -1,4 +1,4 @@
-import type { Account, Book, Budget, Customer, FeeDefinition, FeeTier, InventoryMovement, Order, OrderStatus, PluginDocument, Product, Purchase, PurchaseLine, Reconciliation, Settlement, Supplier, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, DraftSuggestion, FeeDefinition, FeeTier, InventoryMovement, Order, OrderStatus, PluginDocument, Product, Purchase, PurchaseLine, Reconciliation, Settlement, StagingBatch, StagingBatchStatus, StagingRow, StagingRowStatus, Supplier, Transaction } from '@app/core';
 
 /** 每条记录都带的同步元数据，为将来的云同步预留。 */
 export interface SyncMeta {
@@ -22,6 +22,8 @@ export type StoredFeeDefinition = FeeDefinition & SyncMeta;
 export type StoredReconciliation = Reconciliation & SyncMeta;
 export type StoredInventoryMovement = InventoryMovement & SyncMeta;
 export type StoredPluginDocument = PluginDocument & SyncMeta;
+export type StoredStagingBatch = StagingBatch & SyncMeta;
+export type StoredStagingRow = StagingRow & SyncMeta;
 
 /**
  * 通用设置项（KV）。scope = 'app' 为应用级，或某账本 id 为账本级。
@@ -102,6 +104,21 @@ export interface PurchasePatch {
   lines?: PurchaseLine[];
 }
 
+/** 导入批次可改字段：复核台标记已提交/已撤销，或更新文件名标签。source/accountId 建后不可变（改＝删批次重导）。 */
+export interface StagingBatchPatch {
+  label?: string;
+  status?: StagingBatchStatus;
+}
+
+/** 草稿行可改字段（复核决定）：指派账本/对手腿、修正建议、落库回填 txnId、置状态。 */
+export interface StagingRowPatch {
+  assignedBookId?: string | null;
+  assignedAccountId?: string | null;
+  suggestion?: DraftSuggestion;
+  status?: StagingRowStatus;
+  txnId?: string | null;
+}
+
 export interface TxnQuery {
   /** 仅该账本的交易 */
   bookId?: string;
@@ -113,6 +130,8 @@ export interface TxnQuery {
   tag?: string;
   /** 仅含触及该账户的交易 */
   accountId?: string;
+  /** 仅该订单完成生成的分录（M18a：撤销订单一把捞收入/COGS/代采结转） */
+  orderId?: string;
 }
 
 /**
@@ -125,6 +144,15 @@ export interface TxnQuery {
  * - 交易不可移动到其他账本；预算科目必须与预算同账本。
  */
 export interface Repository {
+  /**
+   * 跨方法原子事务（账单导入 增量2）：fn 内调用的多个写操作要么全成、要么全回滚。撤销一张完成订单
+   * （revertOrderCompletion：软删 3 笔分录 + N 条出库流水 + 改订单状态）等多步撤销用它保证不留半截。
+   * 可重入：嵌套调用并入外层事务、不再开新事务。fn 抛错即回滚并向上抛。
+   * 注意：内存实现靠「快照所有表 + 失败还原」回滚，依赖写操作走「整体替换」语义
+   * （除 setPostingsCleared 原地改 cleared 外，全部 mutation 都是 map.set 替换）——撤销编排不用 setPostingsCleared，安全。
+   */
+  transaction<T>(fn: () => Promise<T>): Promise<T>;
+
   addBook(book: Book): Promise<StoredBook>;
   getBook(id: string): Promise<StoredBook | null>;
   listBooks(opts?: { includeArchived?: boolean }): Promise<StoredBook[]>;
@@ -164,9 +192,16 @@ export interface Repository {
   getOrder(id: string): Promise<StoredOrder | null>;
   listOrders(query?: { bookId?: string; customerId?: string; status?: OrderStatus }): Promise<StoredOrder[]>;
   updateOrder(id: string, patch: OrderPatch): Promise<StoredOrder>;
+  // 撤销原语（账单导入 增量2）：软删整单（deleted=1，读路径已排除）。撤一张完成订单由编排层
+  // (revertOrderCompletion) 先反向其分录/库存出库再软删；store 只标记、不级联。
+  softDeleteOrder(id: string): Promise<void>;
 
   addSettlement(settlement: Settlement): Promise<StoredSettlement>;
+  getSettlement(id: string): Promise<StoredSettlement | null>;
   listSettlements(query?: { bookId?: string; orderId?: string; counterpartyId?: string }): Promise<StoredSettlement[]>;
+  // 撤销原语（账单导入 增量2）：软删核销记录（deleted=1）。FIFO 摊应收/应付实时回放，软删后
+  // 自动回退、无需 unwind。撤核销由编排层 (removeSettlement) 先反向其分录再软删，store 只标记。
+  softDeleteSettlement(id: string): Promise<void>;
 
   addProduct(product: Product): Promise<StoredProduct>;
   getProduct(id: string): Promise<StoredProduct | null>;
@@ -191,6 +226,9 @@ export interface Repository {
   // 在手数量/移动加权均价由 core inventoryState 回放流水聚合，不存死值。约束：商品须与流水同账本。
   addInventoryMovement(m: InventoryMovement): Promise<StoredInventoryMovement>;
   listInventoryMovements(query?: { bookId?: string; productId?: string; orderId?: string }): Promise<StoredInventoryMovement[]>;
+  // 撤销原语（账单导入 增量2）：软删库存流水（deleted=1，inventoryState 回放已排除）。仅撤「时间线末端、
+  // 其后该商品无任何 movement」的出库——末端约束由编排层 (revertOrderCompletion) 校验，store 只标记。
+  softDeleteInventoryMovement(id: string): Promise<void>;
 
   // 通用设置（KV）：scope='app' 或账本 id。setSetting 为 upsert（同 scope+key 覆盖）。
   getSetting(scope: string, key: string): Promise<StoredSetting | null>;
@@ -209,4 +247,20 @@ export interface Repository {
   listPluginDocuments(query?: { bookId?: string; pluginId?: string; docType?: string }): Promise<StoredPluginDocument[]>;
   getPluginDocument(id: string): Promise<StoredPluginDocument | null>;
   removePluginDocument(id: string): Promise<void>;
+
+  // 导入复核台脊梁（账单导入 增量1·②；通用 staging，将来对账/OCR/语音/AI 复用）。
+  // 草稿批次 + 草稿行先入此暂存区，复核台逐笔指派账本/对手腿、定夺 unknown，确认后才 expandEntry
+  // 落正式交易并回填 txnId。精简契约（只给复核台要的 ~6 方法，非全 CRUD）：
+  // - addStagingRows 批量插入（一把事务、整批原子；行 id 在批内/库内须唯一，否则整批拒）；
+  // - listStagingRows 支持 batchId/status/bizNos 过滤。bizNos 兼做「再导去重」与「落库中断自愈」，
+  //   但**仅按 biz_no 匹配、不含 source**——biz_no 仅在同一 source 内唯一，编排层去重须按
+  //   (source, biz_no) 复合键判等（取 batch.source）、并把结果当存在性集合用（同号可多行 posted）；
+  // - 行/批次只软删与状态机，无硬删。撤销＝batch.status='reverted' + 反向 txnIds + **逐行退出
+  //   posted（清 txnId）**，否则死交易的 biz_no 会污染去重集致重导被吞；均由编排层负责。
+  addStagingBatch(batch: StagingBatch): Promise<StoredStagingBatch>;
+  addStagingRows(rows: StagingRow[]): Promise<StoredStagingRow[]>;
+  listStagingBatches(query?: { status?: StagingBatchStatus }): Promise<StoredStagingBatch[]>;
+  listStagingRows(query?: { batchId?: string; status?: StagingRowStatus; bizNos?: string[] }): Promise<StoredStagingRow[]>;
+  updateStagingBatch(id: string, patch: StagingBatchPatch): Promise<StoredStagingBatch>;
+  updateStagingRow(id: string, patch: StagingRowPatch): Promise<StoredStagingRow>;
 }

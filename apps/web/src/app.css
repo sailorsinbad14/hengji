@@ -261,8 +261,6 @@ input:focus, select:focus { outline: 2px solid var(--brand-50); border-color: va
 }
 .rec-del { padding: 2px 6px; opacity: 0.35; }
 .rec-row:hover .rec-del { opacity: 1; }
-.rec-add { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
-.rec-add-form { margin-top: 4px; }
 .rec-row:last-child { border-bottom: none; }
 .rec-row.on { background: var(--brand-50); border-radius: 8px; }
 .rec-row input { width: auto; }
@@ -390,3 +388,34 @@ input:focus, select:focus { outline: 2px solid var(--brand-50); border-color: va
 .sec-stale { color: var(--biz); font-weight: 600; }
 .sec-warn-line { color: var(--biz); background: var(--biz-50); padding: 6px 10px; border-radius: 8px; word-break: break-all; }
 .sec-wipe { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+
+/* —— 复核台（账单导入）：同名筛选 / 已复核沉底 / 常驻入账栏 —— */
+.imp-filterbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--biz-50); border: 1px solid #f0d9b5; color: #8a5a14;
+  border-radius: 9px; padding: 8px 12px; margin-bottom: 6px; font-size: 13px;
+}
+.imp-filterbar b { font-weight: 700; }
+.imp-row.done { background: var(--brand-50); border-radius: 8px; }
+.imp-tick { color: var(--brand-700); font-weight: 800; flex: none; }
+.imp-foot {
+  position: sticky; bottom: 0; z-index: 5;
+  display: flex; align-items: center; gap: 12px;
+  margin: 8px -16px -16px; padding: 12px 16px;
+  background: #fff; border-top: 1px solid var(--line); border-radius: 0 0 12px 12px;
+}
+
+/* —— 对账：补录悬浮框 —— */
+.rec-float {
+  position: fixed; right: 24px; top: 80px; z-index: 50;
+  width: 420px; max-width: calc(100vw - 32px); max-height: calc(100vh - 104px);
+  overflow: auto; background: #fff; border: 1px solid var(--line);
+  border-radius: 14px; box-shadow: 0 12px 40px rgba(16, 24, 40, 0.18); padding: 16px;
+}
+.rec-float-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.rec-float-head h4 { font-size: 14px; font-weight: 700; }
+.rec-float-x { color: var(--muted); font-size: 18px; padding: 2px 8px; border-radius: 6px; line-height: 1; }
+.rec-float-x:hover { background: #eef1f5; color: var(--ink); }
+@media (max-width: 880px) {
+  .rec-float { right: 12px; left: 12px; top: 64px; width: auto; max-height: calc(100vh - 88px); }
+}

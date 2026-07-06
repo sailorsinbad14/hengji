@@ -41,6 +41,12 @@ export default function Inventory({ data }: { data: AppData }) {
     void refresh();
   }, [book.id]);
 
+  useEffect(() => {
+    if (adjustFor) {
+      document.getElementById(`adjust-form-${adjustFor}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }, [adjustFor]);
+
   const stockProducts = products.filter((p) => !p.quoteOnly); // 统一库存模型：纯报价/服务不进库存
   // 库存为人民币本位：付款账户限 CNY 资产，排除应收/库存商品自管科目
   const payAccounts = accounts.filter(
@@ -178,7 +184,7 @@ export default function Inventory({ data }: { data: AppData }) {
                 </div>
               </div>
               {adjustFor === p.id && (
-                <div className="collect">
+                <div className="collect" id={`adjust-form-${p.id}`}>
                   <p className="muted small" style={{ marginTop: 0 }}>
                     把在手数调到实际盘点数；差额按当前均价 {fmtMoney(st.avgCost)} 计入「库存损溢」。盘盈可填入账单价。
                   </p>

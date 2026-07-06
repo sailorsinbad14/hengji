@@ -1,5 +1,6 @@
 mod crypto;
 mod db;
+mod ocr;
 
 use std::sync::Mutex;
 
@@ -23,6 +24,7 @@ pub fn run() {
             crypto::lock,
             crypto::export_backup,
             crypto::wipe_data,
+            ocr::ocr_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

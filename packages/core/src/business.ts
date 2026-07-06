@@ -255,6 +255,31 @@ export function outstandingCharges(
   return out;
 }
 
+// —— 出口① 核销匹配（账单导入 增量3）：把一笔生意收/付款流水匹配到已有客户/供应商与未结清单据。 ——
+// v1 口径（评估已锁 Q1）：对方名精确匹配（trim 后完全相等）+ 金额精确等额；不做模糊匹配、不静默核销，
+// 复核台据建议预选、由用户确认（先匹配后造＝挡赊销双重计数的护栏）。
+
+/**
+ * 对方名 → 客户/供应商精确匹配：payee trim 后与实体名 trim 完全相等才命中。
+ * 唯一命中返其 id；无命中 / 多个同名（歧义）返 null——交持久记忆或人工定夺，绝不猜（误核销最贵）。
+ */
+export function matchEntityByName<T extends { id: string; name: string }>(payee: string, entities: ReadonlyArray<T>): string | null {
+  const p = payee.trim();
+  if (!p) return null;
+  const hits = entities.filter((e) => e.name.trim() === p);
+  return hits.length === 1 ? hits[0]!.id : null;
+}
+
+/**
+ * 给一笔核销金额，从未结清项里找「欠额恰好等于该金额」的单（增量3：核销建议 settlement.orderId）。
+ * v1 只认精确等额（容差由调用方先归一到分）；多单同额取最早（FIFO 直觉）；无精确命中返 null
+ * （此时按客户/供应商整体核销、orderId=null，由 FIFO 摊销决定落到哪些单）。
+ */
+export function matchOutstandingByAmount<T extends { owed: number; date: string }>(amount: number, items: ReadonlyArray<T>): T | null {
+  const exact = items.filter((i) => i.owed === amount).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return exact[0] ?? null;
+}
+
 /**
  * 应收账龄分桶：按每笔欠款的账龄（自开票/下单日起的天数）归入 0–30 / 31–60 / 61–90 / 90+ 桶。
  * 边界归入较小桶：30→0–30、60→31–60、90→61–90、91→90+。金额单位需调用方统一（混合币种应先折算）。

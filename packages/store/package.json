@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./sqlite": "./src/sqlite.ts",
     "./tauri": "./src/tauri.ts",
-    "./crypto": "./src/crypto.ts"
+    "./crypto": "./src/crypto.ts",
+    "./ocr": "./src/ocr.ts"
   },
   "scripts": {
     "test": "vitest run",

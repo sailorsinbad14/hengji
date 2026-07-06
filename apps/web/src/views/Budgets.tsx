@@ -39,8 +39,31 @@ export default function Budgets({ data }: { data: AppData }) {
         <span className="muted">{month}</span>
       </div>
       <div className="card">
+        <h3>新增预算</h3>
+        <div className="qgrid">
+          <label>
+            分类
+            <select value={effAcc} onChange={(e) => setAccId(e.target.value)}>
+              {candidates.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            月度限额（元）
+            <input inputMode="decimal" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="1000" />
+          </label>
+        </div>
+        {err && <p className="form-err">{err}</p>}
+        <button className="btn btn-primary" onClick={() => void add()}>
+          添加
+        </button>
+      </div>
+      <div className="card">
         {mcEnabled && <p className="muted small">预算按人民币（¥）计；外币支出按当前汇率折算计入。</p>}
-        {lines.length === 0 && <p className="muted">还没有预算，先在下面加一个。</p>}
+        {lines.length === 0 && <p className="muted">还没有预算，在上方加一个。</p>}
         {lines.map((l) => {
           const pct = l.limit > 0 ? Math.min(100, Math.round((l.spent / l.limit) * 100)) : 0;
           const budget = budgets.find((b) => b.accountId === l.accountId);
@@ -73,29 +96,6 @@ export default function Budgets({ data }: { data: AppData }) {
             </div>
           );
         })}
-      </div>
-      <div className="card">
-        <h3>新增预算</h3>
-        <div className="qgrid">
-          <label>
-            分类
-            <select value={effAcc} onChange={(e) => setAccId(e.target.value)}>
-              {candidates.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            月度限额（元）
-            <input inputMode="decimal" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="1000" />
-          </label>
-        </div>
-        {err && <p className="form-err">{err}</p>}
-        <button className="btn btn-primary" onClick={() => void add()}>
-          添加
-        </button>
       </div>
     </>
   );

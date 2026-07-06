@@ -28,6 +28,9 @@ export default function Suppliers({ data }: { data: AppData }) {
   useEffect(() => {
     void refresh();
   }, [book.id]);
+  useEffect(() => {
+    if (payFor) document.getElementById(`pay-form-${payFor}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [payFor]);
 
   const rows = list.slice().sort((a, b) => Number(a.archived) - Number(b.archived));
   // 还款付款账户：人民币本位，限 CNY 资产，排除应收/库存商品自管科目（应付为负债，已被资产过滤排除）
@@ -223,7 +226,7 @@ export default function Suppliers({ data }: { data: AppData }) {
                 </div>
               </div>
               {payFor === s.id && (
-                <div className="qgrid" style={{ marginTop: 8 }}>
+                <div className="qgrid" id={`pay-form-${s.id}`} style={{ marginTop: 8 }}>
                   <label>
                     付款金额(¥)
                     <input inputMode="decimal" value={pAmount} onChange={(e) => setPAmount(e.target.value)} placeholder="0.00" />

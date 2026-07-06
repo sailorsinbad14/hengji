@@ -1,6 +1,6 @@
 import { TauriDb } from './tauri-bridge';
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Customer, FeeDefinition, InventoryMovement, Order, OrderStatus, PluginDocument, Posting, Product, Purchase, Reconciliation, Settlement, Supplier, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, FeeDefinition, InventoryMovement, Order, OrderStatus, PluginDocument, Posting, Product, Purchase, Reconciliation, Settlement, StagingBatch, StagingBatchStatus, StagingRow, StagingRowStatus, Supplier, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
@@ -12,6 +12,8 @@ import type {
   ProductPatch,
   PurchasePatch,
   Repository,
+  StagingBatchPatch,
+  StagingRowPatch,
   StoredAccount,
   StoredBook,
   StoredBudget,
@@ -25,6 +27,8 @@ import type {
   StoredReconciliation,
   StoredSetting,
   StoredSettlement,
+  StoredStagingBatch,
+  StoredStagingRow,
   StoredSupplier,
   StoredTransaction,
   SupplierPatch,
@@ -49,6 +53,8 @@ import {
   toReconciliation,
   toSetting,
   toSettlement,
+  toStagingBatch,
+  toStagingRow,
   toSupplier,
   toTxn,
 } from './schema';
@@ -69,6 +75,8 @@ import type {
   ReconciliationRow,
   SettingRow,
   SettlementRow,
+  StagingBatchRow,
+  StagingRowRow,
   SupplierRow,
   TxnRow,
 } from './schema';
@@ -91,6 +99,42 @@ export class TauriSqlRepository implements Repository {
     private readonly db: TauriDb,
     private readonly now: Clock,
   ) {}
+
+  /** 事务嵌套深度（>0 即在 transaction() 内）：此时多写改走逐条 execute 并入外层 BEGIN，不用 db.batch（其自带事务会嵌套报错）。 */
+  private txDepth = 0;
+
+  /** 写若干语句：事务内逐条 execute（并入外层一把事务）；否则 db.batch 自带原子事务。 */
+  private async applyWrites(stmts: Stmt[]): Promise<void> {
+    if (this.txDepth > 0) {
+      for (const s of stmts) await this.db.execute(s.sql, s.params);
+    } else {
+      await this.db.batch(stmts);
+    }
+  }
+
+  /**
+   * 跨方法原子事务（增量2）：execute('BEGIN') → await fn → execute('COMMIT')；fn 抛错 ROLLBACK。可重入。
+   * Rust db_execute 无参数走 execute_batch，接受 BEGIN/COMMIT/ROLLBACK；单连接、事务态跨 IPC 调用持续。
+   */
+  async transaction<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.txDepth > 0) return fn();
+    await this.db.execute('BEGIN');
+    this.txDepth++;
+    try {
+      const r = await fn();
+      await this.db.execute('COMMIT');
+      return r;
+    } catch (e) {
+      try {
+        await this.db.execute('ROLLBACK');
+      } catch {
+        /* 回滚本身失败也要把原错抛出去 */
+      }
+      throw e;
+    } finally {
+      this.txDepth--;
+    }
+  }
 
   /**
    * 打开（或创建）本地 SQLite、自动迁移 schema。path 形如 'sqlite:heng.db'，相对应用配置目录。
@@ -249,11 +293,11 @@ export class TauriSqlRepository implements Repository {
     assertBalanced(txn.postings);
     await this.assertSameBook(txn);
     const ts = this.now();
-    await this.db.batch([
+    await this.applyWrites([
       {
-        sql: `INSERT INTO transactions (id, book_id, date, payee, note, tags, created_at, updated_at, deleted)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0)`,
-        params: [txn.id, txn.bookId, txn.date, txn.payee, txn.note, JSON.stringify(txn.tags), ts, ts],
+        sql: `INSERT INTO transactions (id, book_id, date, payee, note, tags, order_id, created_at, updated_at, deleted)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0)`,
+        params: [txn.id, txn.bookId, txn.date, txn.payee, txn.note, JSON.stringify(txn.tags), txn.orderId ?? null, ts, ts],
       },
       ...this.postingStmts(txn.id, txn.postings),
     ]);
@@ -294,6 +338,10 @@ export class TauriSqlRepository implements Repository {
       params.push(query.accountId);
       cond.push(`EXISTS (SELECT 1 FROM postings p WHERE p.txn_id = t.id AND p.account_id = $${params.length})`);
     }
+    if (query.orderId) {
+      params.push(query.orderId);
+      cond.push(`t.order_id = $${params.length}`);
+    }
     const sql = `SELECT t.* FROM transactions t WHERE ${cond.join(' AND ')} ORDER BY t.date DESC, t.created_at DESC, t.id DESC`;
     let rows = await this.db.select<TxnRow[]>(sql, params);
     if (query.tag) {
@@ -325,7 +373,7 @@ export class TauriSqlRepository implements Repository {
     assertBalanced(txn.postings);
     await this.assertSameBook(txn);
     const ts = this.now();
-    await this.db.batch([
+    await this.applyWrites([
       {
         sql: 'UPDATE transactions SET date=$1, payee=$2, note=$3, tags=$4, updated_at=$5 WHERE id=$6',
         params: [txn.date, txn.payee, txn.note, JSON.stringify(txn.tags), ts, id],
@@ -523,7 +571,7 @@ export class TauriSqlRepository implements Repository {
     await this.assertBook(order.bookId);
     if ((await this.customerBookId(order.customerId)) !== order.bookId) throw new Error('订单客户必须与订单同账本');
     const ts = this.now();
-    await this.db.batch([
+    await this.applyWrites([
       {
         sql: `INSERT INTO orders (id, book_id, customer_id, date, currency, status, note, revenue_txn_id, created_at, updated_at, deleted)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0)`,
@@ -595,6 +643,13 @@ export class TauriSqlRepository implements Repository {
     return (await this.getOrder(id))!;
   }
 
+  async softDeleteOrder(id: string): Promise<void> {
+    if (!(await this.exists('SELECT 1 FROM orders WHERE id = $1 AND deleted = 0', [id]))) {
+      throw new Error(`订单不存在：${id}`);
+    }
+    await this.db.execute('UPDATE orders SET deleted = 1, updated_at = $1 WHERE id = $2', [this.now(), id]);
+  }
+
   // ---- 生意：收款 ----
   async addSettlement(settlement: Settlement): Promise<StoredSettlement> {
     if (await this.exists('SELECT 1 FROM settlements WHERE id = $1', [settlement.id])) {
@@ -641,9 +696,16 @@ export class TauriSqlRepository implements Repository {
     return (await this.getSettlement(settlement.id))!;
   }
 
-  private async getSettlement(id: string): Promise<StoredSettlement | null> {
+  async getSettlement(id: string): Promise<StoredSettlement | null> {
     const rows = await this.db.select<SettlementRow[]>('SELECT * FROM settlements WHERE id = $1 AND deleted = 0', [id]);
     return rows[0] ? toSettlement(rows[0]) : null;
+  }
+
+  async softDeleteSettlement(id: string): Promise<void> {
+    if (!(await this.exists('SELECT 1 FROM settlements WHERE id = $1 AND deleted = 0', [id]))) {
+      throw new Error(`收款不存在：${id}`);
+    }
+    await this.db.execute('UPDATE settlements SET deleted = 1, updated_at = $1 WHERE id = $2', [this.now(), id]);
   }
 
   async listSettlements(
@@ -796,6 +858,117 @@ export class TauriSqlRepository implements Repository {
     await this.db.execute('UPDATE plugin_documents SET deleted = 1, updated_at = $1 WHERE id = $2', [this.now(), id]);
   }
 
+  // ---- 导入复核台脊梁（账单导入 增量1·②）----
+  private async assertStagingBatch(id: string): Promise<void> {
+    if (!(await this.exists('SELECT 1 FROM staging_batches WHERE id = $1 AND deleted = 0', [id]))) {
+      throw new Error(`导入批次不存在：${id}`);
+    }
+  }
+
+  private async getStagingBatch(id: string): Promise<StoredStagingBatch | null> {
+    const rows = await this.db.select<StagingBatchRow[]>('SELECT * FROM staging_batches WHERE id = $1 AND deleted = 0', [id]);
+    return rows[0] ? toStagingBatch(rows[0]) : null;
+  }
+
+  private async getStagingRow(id: string): Promise<StoredStagingRow | null> {
+    const rows = await this.db.select<StagingRowRow[]>('SELECT * FROM staging_rows WHERE id = $1 AND deleted = 0', [id]);
+    return rows[0] ? toStagingRow(rows[0]) : null;
+  }
+
+  async addStagingBatch(batch: StagingBatch): Promise<StoredStagingBatch> {
+    if (await this.exists('SELECT 1 FROM staging_batches WHERE id = $1', [batch.id])) throw new Error(`导入批次已存在：${batch.id}`);
+    const ts = this.now();
+    await this.db.execute(
+      'INSERT INTO staging_batches (id, source, account_id, label, status, created_at, updated_at, deleted) VALUES ($1, $2, $3, $4, $5, $6, $7, 0)',
+      [batch.id, batch.source, batch.accountId, batch.label, batch.status, ts, ts],
+    );
+    return (await this.getStagingBatch(batch.id))!;
+  }
+
+  async addStagingRows(rows: StagingRow[]): Promise<StoredStagingRow[]> {
+    if (rows.length === 0) return [];
+    // 批量前置校验（批次存在 + id 不重复，含同批入参自撞），再一把事务写入——半截不写、三实现行为一致
+    const seen = new Set<string>();
+    for (const r of rows) {
+      await this.assertStagingBatch(r.batchId);
+      if (seen.has(r.id) || (await this.exists('SELECT 1 FROM staging_rows WHERE id = $1', [r.id]))) throw new Error(`导入草稿行已存在：${r.id}`);
+      seen.add(r.id);
+    }
+    const ts = this.now();
+    await this.applyWrites(
+      rows.map((r) => ({
+        sql: `INSERT INTO staging_rows (id, batch_id, biz_no, date, datetime, amount_minor, direction, payee, counterparty_account, note, accounting_type, suggestion, assigned_book_id, assigned_account_id, status, txn_id, created_at, updated_at, deleted)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 0)`,
+        params: [r.id, r.batchId, r.bizNo, r.date, r.datetime, r.amountMinor, r.direction, r.payee, r.counterpartyAccount, r.note, r.accountingType, r.suggestion, r.assignedBookId, r.assignedAccountId, r.status, r.txnId, ts, ts],
+      })),
+    );
+    const out: StoredStagingRow[] = [];
+    for (const r of rows) out.push((await this.getStagingRow(r.id))!);
+    return out;
+  }
+
+  async listStagingBatches(query: { status?: StagingBatchStatus } = {}): Promise<StoredStagingBatch[]> {
+    const cond = ['deleted = 0'];
+    const params: unknown[] = [];
+    if (query.status) {
+      params.push(query.status);
+      cond.push(`status = $${params.length}`);
+    }
+    const rows = await this.db.select<StagingBatchRow[]>(`SELECT * FROM staging_batches WHERE ${cond.join(' AND ')}`, params);
+    return rows.map(toStagingBatch);
+  }
+
+  async listStagingRows(query: { batchId?: string; status?: StagingRowStatus; bizNos?: string[] } = {}): Promise<StoredStagingRow[]> {
+    const base = ['deleted = 0'];
+    const baseParams: unknown[] = [];
+    if (query.batchId) {
+      baseParams.push(query.batchId);
+      base.push(`batch_id = $${baseParams.length}`);
+    }
+    if (query.status) {
+      baseParams.push(query.status);
+      base.push(`status = $${baseParams.length}`);
+    }
+    if (query.bizNos) {
+      if (query.bizNos.length === 0) return [];
+      // 分片避免 IN 占位符超 SQLite 变量上限
+      const out: StoredStagingRow[] = [];
+      for (const part of chunk(query.bizNos, 500)) {
+        const params = [...baseParams];
+        const ph = part
+          .map((b) => {
+            params.push(b);
+            return `$${params.length}`;
+          })
+          .join(', ');
+        const rows = await this.db.select<StagingRowRow[]>(`SELECT * FROM staging_rows WHERE ${base.join(' AND ')} AND biz_no IN (${ph})`, params);
+        out.push(...rows.map(toStagingRow));
+      }
+      return out;
+    }
+    const rows = await this.db.select<StagingRowRow[]>(`SELECT * FROM staging_rows WHERE ${base.join(' AND ')}`, baseParams);
+    return rows.map(toStagingRow);
+  }
+
+  async updateStagingBatch(id: string, patch: StagingBatchPatch): Promise<StoredStagingBatch> {
+    const cur = await this.getStagingBatch(id);
+    if (!cur) throw new Error(`导入批次不存在：${id}`);
+    const next: StoredStagingBatch = { ...cur, ...patch, updatedAt: this.now() };
+    await this.db.execute('UPDATE staging_batches SET label=$1, status=$2, updated_at=$3 WHERE id=$4', [next.label, next.status, next.updatedAt, id]);
+    return (await this.getStagingBatch(id))!;
+  }
+
+  async updateStagingRow(id: string, patch: StagingRowPatch): Promise<StoredStagingRow> {
+    const cur = await this.getStagingRow(id);
+    if (!cur) throw new Error(`导入草稿行不存在：${id}`);
+    const next: StoredStagingRow = { ...cur, ...patch, updatedAt: this.now() };
+    await this.db.execute(
+      'UPDATE staging_rows SET assigned_book_id=$1, assigned_account_id=$2, suggestion=$3, status=$4, txn_id=$5, updated_at=$6 WHERE id=$7',
+      [next.assignedBookId, next.assignedAccountId, next.suggestion, next.status, next.txnId, next.updatedAt, id],
+    );
+    return (await this.getStagingRow(id))!;
+  }
+
   // ---- 生意：代采采购单（C2d）----
   private purchaseLineStmts(purchaseId: string, lines: Purchase['lines']): Stmt[] {
     return lines.map((l) => ({
@@ -820,7 +993,7 @@ export class TauriSqlRepository implements Repository {
       if (orows[0].book_id !== purchase.bookId) throw new Error('关联订单必须与采购单同账本');
     }
     const ts = this.now();
-    await this.db.batch([
+    await this.applyWrites([
       {
         sql: `INSERT INTO purchases (id, book_id, supplier_id, kind, order_id, dest_account_id, date, pay_mode, note, txn_id, created_at, updated_at, deleted)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0)`,
@@ -894,7 +1067,7 @@ export class TauriSqlRepository implements Repository {
       stmts.push({ sql: 'DELETE FROM purchase_lines WHERE purchase_id = $1', params: [id] });
       stmts.push(...this.purchaseLineStmts(id, patch.lines));
     }
-    await this.db.batch(stmts);
+    await this.applyWrites(stmts);
     return (await this.getPurchase(id))!;
   }
 
@@ -948,6 +1121,13 @@ export class TauriSqlRepository implements Repository {
     return rows.map(toInventoryMovement);
   }
 
+  async softDeleteInventoryMovement(id: string): Promise<void> {
+    if (!(await this.exists('SELECT 1 FROM inventory_movements WHERE id = $1 AND deleted = 0', [id]))) {
+      throw new Error(`库存流水不存在：${id}`);
+    }
+    await this.db.execute('UPDATE inventory_movements SET deleted = 1, updated_at = $1 WHERE id = $2', [this.now(), id]);
+  }
+
   // ---- 设置（KV）----
   async getSetting(scope: string, key: string): Promise<StoredSetting | null> {
     const rows = await this.db.select<SettingRow[]>('SELECT * FROM settings WHERE scope = $1 AND key = $2', [scope, key]);
@@ -976,7 +1156,7 @@ export class TauriSqlRepository implements Repository {
   async setPostingsCleared(postingIds: string[], cleared: boolean): Promise<void> {
     if (postingIds.length === 0) return;
     const c = cleared ? 1 : 0;
-    await this.db.batch(
+    await this.applyWrites(
       postingIds.map((id) => ({ sql: 'UPDATE postings SET cleared = $1 WHERE id = $2', params: [c, id] })),
     );
   }

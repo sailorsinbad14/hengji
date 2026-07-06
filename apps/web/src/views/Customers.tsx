@@ -80,7 +80,29 @@ export default function Customers({ data }: { data: AppData }) {
       </div>
 
       <div className="card">
-        {rows.length === 0 && <p className="muted">还没有客户，先在下面添加一个。</p>}
+        <h3>新增客户</h3>
+        <div className="qgrid">
+          <label>
+            名称
+            <input placeholder="客户名称" value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label>
+            电话（可选）
+            <input placeholder="手机号" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          </label>
+          <label>
+            默认账期（天，可选）
+            <input inputMode="numeric" placeholder="0 = 货到付款" value={dueDays} onChange={(e) => setDueDays(e.target.value)} />
+          </label>
+        </div>
+        {err && <p className="form-err">{err}</p>}
+        <button className="btn btn-primary" onClick={() => void add()}>
+          添加
+        </button>
+      </div>
+
+      <div className="card">
+        {rows.length === 0 && <p className="muted">还没有客户，在上方添加一个。</p>}
         {rows.map((c) => {
           const owed = receivableBalance(accounts, txns, c.name, convert);
           return (
@@ -138,28 +160,6 @@ export default function Customers({ data }: { data: AppData }) {
             </div>
           );
         })}
-      </div>
-
-      <div className="card">
-        <h3>新增客户</h3>
-        <div className="qgrid">
-          <label>
-            名称
-            <input placeholder="客户名称" value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <label>
-            电话（可选）
-            <input placeholder="手机号" value={phone} onChange={(e) => setPhone(e.target.value)} />
-          </label>
-          <label>
-            默认账期（天，可选）
-            <input inputMode="numeric" placeholder="0 = 货到付款" value={dueDays} onChange={(e) => setDueDays(e.target.value)} />
-          </label>
-        </div>
-        {err && <p className="form-err">{err}</p>}
-        <button className="btn btn-primary" onClick={() => void add()}>
-          添加
-        </button>
       </div>
     </>
   );

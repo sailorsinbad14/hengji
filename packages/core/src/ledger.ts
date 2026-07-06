@@ -107,6 +107,37 @@ export function expandEntry(input: EntryInput, genId: () => string): Transaction
   };
 }
 
+/**
+ * 红冲（反向冲销，账单导入 增量2）：给定一笔已落库交易，生成一笔金额逐腿取反的「冲正」交易
+ * （新 id、新日期、payee/note 由调用方给），**原交易不动**。用于撤销已对账(cleared)分录——
+ * 保留审计轨迹、不破坏已完成对账的快照（冲正落在撤销当期、不回改历史期间）。
+ * 单币种取反后仍求和=0；多币种逐腿取反、按币种豁免。冲正分录不带 cleared（是新发生、未对账事项）。
+ */
+export function reversalEntry(
+  source: Pick<Transaction, 'bookId' | 'postings'>,
+  opts: { date: string; payee?: string; note?: string; tags?: string[] },
+  genId: () => string,
+): Transaction {
+  const txnId = genId();
+  const postings: Posting[] = source.postings.map((p) => ({
+    id: genId(),
+    txnId,
+    accountId: p.accountId,
+    amount: -p.amount,
+    currency: p.currency,
+  }));
+  assertBalanced(postings);
+  return {
+    id: txnId,
+    bookId: source.bookId,
+    date: opts.date,
+    payee: opts.payee ?? '',
+    note: opts.note ?? '',
+    tags: opts.tags ?? [],
+    postings,
+  };
+}
+
 export interface ForexInput {
   bookId: string;
   date: string;

@@ -139,29 +139,6 @@ export default function Purchases({ data }: { data: AppData }) {
       </div>
 
       <div className="card">
-        <h3>采购单</h3>
-        {purchases.length === 0 && <p className="muted">还没有采购单。下面可新建「入库存 / 费用」采购；代采在订单页「为此单采购」生成。</p>}
-        {purchases.map((p) => {
-          const total = purchaseTotal(p.lines);
-          const draft = !p.txnId;
-          const who = p.supplierId ? supName(p.supplierId) : p.payMode === 'cash' ? '现结' : '—';
-          return (
-            <div className="brow" key={p.id}>
-              <div className="bhead">
-                <span className="bname">
-                  <span className="chip">{KIND_LABEL[p.kind]}</span> {who} <span className="muted">· {p.date}</span>
-                  {draft && <span className="chip warn"> 草稿</span>}
-                </span>
-                <span className="chip">{p.payMode === 'credit' ? '赊账' : '现结'}</span>
-                <span className="bnum">{fmtMoney(total)}</span>
-              </div>
-              <div className="ord-items">{p.lines.map((l) => `${l.name}×${l.qty}`).join('，')}</div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="card">
         <h3>新建采购单</h3>
         <p className="muted small" style={{ marginTop: 0 }}>
           入库存＝进货补库存（进移动加权均价池）；费用＝直接计入费用科目（运费 / 办公用品等）。代采请到「订单」页「为此单采购」。
@@ -268,6 +245,29 @@ export default function Purchases({ data }: { data: AppData }) {
         <button className="btn btn-primary" style={{ marginTop: 8 }} onClick={() => void submit()} disabled={saving}>
           新建采购
         </button>
+      </div>
+
+      <div className="card">
+        <h3>采购单</h3>
+        {purchases.length === 0 && <p className="muted">还没有采购单。在上方可新建「入库存 / 费用」采购；代采在订单页「为此单采购」生成。</p>}
+        {purchases.map((p) => {
+          const total = purchaseTotal(p.lines);
+          const draft = !p.txnId;
+          const who = p.supplierId ? supName(p.supplierId) : p.payMode === 'cash' ? '现结' : '—';
+          return (
+            <div className="brow" key={p.id}>
+              <div className="bhead">
+                <span className="bname">
+                  <span className="chip">{KIND_LABEL[p.kind]}</span> {who} <span className="muted">· {p.date}</span>
+                  {draft && <span className="chip warn"> 草稿</span>}
+                </span>
+                <span className="chip">{p.payMode === 'credit' ? '赊账' : '现结'}</span>
+                <span className="bnum">{fmtMoney(total)}</span>
+              </div>
+              <div className="ord-items">{p.lines.map((l) => `${l.name}×${l.qty}`).join('，')}</div>
+            </div>
+          );
+        })}
       </div>
     </>
   );

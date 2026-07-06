@@ -67,6 +67,10 @@ export default function FeeDefinitions({ data }: { data: AppData }) {
   useEffect(() => {
     void refresh();
   }, [book.id]);
+  // 表单在列表上方：点列表里的「编辑」时，把表单滚入视野（否则在长列表下方点编辑、上方表单看不见）
+  useEffect(() => {
+    if (editId) document.getElementById('fee-edit-form')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [editId]);
 
   function resetForm(): void {
     setEditId(null);
@@ -128,31 +132,7 @@ export default function FeeDefinitions({ data }: { data: AppData }) {
         <span className="muted">佣金 / 运费 / 包装费等——开单按行勾选，都计入收入</span>
       </div>
 
-      <div className="card">
-        {rows.length === 0 && <p className="muted">还没有额外费用。下面添加后，开单时可在每个商品行勾选应用。</p>}
-        {rows.map((f) => (
-          <div className="brow" key={f.id}>
-            <div className="bhead">
-              <span className={`bname${f.archived ? ' muted' : ''}`}>
-                {f.name}
-                <span className="chip"> {CALC_LABEL[f.calcType]}</span>
-                {f.archived && <span className="chip"> 已归档</span>}
-              </span>
-              <span className="bnum muted">{f.tiers.map((t) => tierText(f.calcType, t)).join(' · ')}</span>
-              <div className="arow-btns">
-                <button className="lnk" onClick={() => openEdit(f)}>
-                  编辑
-                </button>
-                <button className={`lnk${f.archived ? '' : ' danger'}`} onClick={() => void toggleArchive(f)}>
-                  {f.archived ? '恢复' : '归档'}
-                </button>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="card">
+      <div className="card" id={editId ? 'fee-edit-form' : undefined}>
         <h3>{editId ? '编辑费用' : '新增费用'}</h3>
         <div className="qgrid">
           <label>
@@ -206,6 +186,30 @@ export default function FeeDefinitions({ data }: { data: AppData }) {
             </button>
           )}
         </div>
+      </div>
+
+      <div className="card">
+        {rows.length === 0 && <p className="muted">还没有额外费用。在上方添加后，开单时可在每个商品行勾选应用。</p>}
+        {rows.map((f) => (
+          <div className="brow" key={f.id}>
+            <div className="bhead">
+              <span className={`bname${f.archived ? ' muted' : ''}`}>
+                {f.name}
+                <span className="chip"> {CALC_LABEL[f.calcType]}</span>
+                {f.archived && <span className="chip"> 已归档</span>}
+              </span>
+              <span className="bnum muted">{f.tiers.map((t) => tierText(f.calcType, t)).join(' · ')}</span>
+              <div className="arow-btns">
+                <button className="lnk" onClick={() => openEdit(f)}>
+                  编辑
+                </button>
+                <button className={`lnk${f.archived ? '' : ' danger'}`} onClick={() => void toggleArchive(f)}>
+                  {f.archived ? '恢复' : '归档'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
     </>
   );

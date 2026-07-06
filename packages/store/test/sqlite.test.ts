@@ -81,6 +81,7 @@ describe('SqliteRepository · 遗留库迁移（m1 库 → m2 多账本）', () 
       expect(allBooks[0]!.type).toBe('personal');
       expect((await repo.getAccount('bank'))!.bookId).toBe('default');
       expect((await repo.getTransaction('t1'))!.bookId).toBe('default');
+      expect((await repo.getTransaction('t1'))!.orderId).toBeNull(); // M18a：旧库 ALTER 加列、既有行回落 NULL
       expect((await repo.listBudgets({ bookId: 'default' })).length).toBe(1);
       repo.close();
 

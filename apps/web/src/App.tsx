@@ -22,6 +22,7 @@ import Inventory from './views/Inventory';
 import Purchases from './views/Purchases';
 import FeeDefinitions from './views/FeeDefinitions';
 import Reconcile from './views/Reconcile';
+import ImportReview from './views/ImportReview';
 import Settings from './views/Settings';
 
 type View = 'dashboard' | 'txns' | 'budgets' | 'invest' | 'accounts' | 'reconcile' | 'customers' | 'suppliers' | 'orders' | 'products' | 'inventory' | 'purchases' | 'fees' | 'documents';
@@ -29,6 +30,7 @@ type View = 'dashboard' | 'txns' | 'budgets' | 'invest' | 'accounts' | 'reconcil
 const OVERVIEW = 'all';
 const SETTINGS = '__settings__';
 const RECONCILE = '__reconcile__';
+const IMPORT = '__import__';
 
 export interface AppData {
   repo: Repository;
@@ -414,6 +416,9 @@ export default function App() {
           </>
         )}
 
+        <button className={`book settings-link${cur === IMPORT ? ' on' : ''}`} onClick={() => setCur(IMPORT)}>
+          📥 导入账单
+        </button>
         {advanced && (
           <button className={`book settings-link${cur === RECONCILE ? ' on' : ''}`} onClick={() => setCur(RECONCILE)}>
             ✓ 对账
@@ -441,6 +446,8 @@ export default function App() {
           />
         ) : cur === RECONCILE ? (
           <Reconcile repo={repo} accounts={liveAccounts} allTxns={txns} books={allBooks} reload={() => loadFrom(repo)} />
+        ) : cur === IMPORT ? (
+          <ImportReview repo={repo} books={books} accounts={liveAccounts} reload={() => loadFrom(repo)} />
         ) : cur === OVERVIEW || !data ? (
           <OverviewAll books={books} accounts={accounts} txns={txns} settings={settings} convert={convert} onOpen={openBook} />
         ) : (

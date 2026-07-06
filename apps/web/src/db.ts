@@ -1,5 +1,5 @@
 import { adjustBalanceEntry, creditPurchaseEntry, currentAvgCost, defaultChartFor, expandEntry, orderRevenueEntry, orderTotal, toMinor } from '@app/core';
-import type { Account, Book, BookType, EntryInput } from '@app/core';
+import type { Account, Book, BookType, EntryInput, StagingRow } from '@app/core';
 import { InMemoryRepository } from '@app/store';
 import type { Repository } from '@app/store';
 import { localISO } from './format';
@@ -357,6 +357,21 @@ async function bootstrapDemo(): Promise<Repository> {
       genId,
     ),
   );
+
+  // —— 账单导入复核台演示（增量1·②）——一批支付宝资金流水待复核，落在全局「支付宝」上。
+  // 展示「一键导入、当场分清生意/生活」：收钱码收款=生意收入、餐饮/超市=生活支出、双关「转账」=待人工定夺。
+  const impBatchId = genId();
+  await repo.addStagingBatch({ id: impBatchId, source: 'alipay-fund-flow', accountId: me.byName('支付宝'), label: '支付宝账单示例.csv', status: 'reviewing' });
+  const draft = (bizNo: string, dateN: number, amountYuan: number, direction: 'in' | 'out', payee: string, note: string, accountingType: string, suggestion: StagingRow['suggestion']): StagingRow => ({
+    id: genId(), batchId: impBatchId, bizNo, date: daysAgo(dateN), datetime: `${daysAgo(dateN)} 12:00:00`, amountMinor: toMinor(amountYuan), direction,
+    payee, counterpartyAccount: '', note, accountingType, suggestion, assignedBookId: null, assignedAccountId: null, status: 'pending', txnId: null,
+  });
+  await repo.addStagingRows([
+    draft('2026D0001', 3, 1300, 'in', '微信用户***8821', '收钱码收款', '在线支付', 'income'),
+    draft('2026D0002', 2, 45.5, 'out', '海底捞火锅', '扫码付款', '在线支付', 'expense'),
+    draft('2026D0003', 2, 128, 'out', '永辉超市', '日用百货', '消费', 'expense'),
+    draft('2026D0004', 1, 500, 'out', '张三', '转账', '转账', 'unknown'),
+  ]);
 
   return repo;
 }

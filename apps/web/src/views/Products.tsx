@@ -137,7 +137,48 @@ export default function Products({ data }: { data: AppData }) {
       </div>
 
       <div className="card">
-        {rows.length === 0 && <p className="muted">还没有商品，先在下面添加；开单时可直接选商品自动带价。</p>}
+        <h3>新增商品</h3>
+        <div className="qgrid">
+          <label>
+            名称
+            <input placeholder="商品名称" value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label>
+            单位（可选）
+            <input placeholder="个 / kg" value={unit} onChange={(e) => setUnit(e.target.value)} />
+          </label>
+          <label>
+            进价（元，可选）
+            <input inputMode="decimal" placeholder="0.00" value={cost} onChange={(e) => setCost(e.target.value)} />
+          </label>
+          <label>
+            售价（元，可选）
+            <input inputMode="decimal" placeholder="0.00" value={sale} onChange={(e) => setSale(e.target.value)} />
+          </label>
+        </div>
+        <label className="chkline">
+          <input type="checkbox" checked={quoteOnly} onChange={(e) => setQuoteOnly(e.target.checked)} /> 纯报价 / 服务（不做库存追踪、不进成本，如设计费/打样费）
+        </label>
+        {!quoteOnly && (
+          <div className="qgrid" style={{ marginTop: 4 }}>
+            <label>
+              期初库存数量（可选）
+              <input inputMode="decimal" placeholder="0" value={openQty} onChange={(e) => setOpenQty(e.target.value)} />
+            </label>
+            <label>
+              期初单价（元，留空用进价）
+              <input inputMode="decimal" placeholder={cost.trim() || '0.00'} value={openCost} onChange={(e) => setOpenCost(e.target.value)} />
+            </label>
+          </div>
+        )}
+        {!editId && err && <p className="form-err" style={{ marginTop: 8 }}>{err}</p>}
+        <button className="btn btn-primary" style={{ marginTop: 8 }} onClick={() => void add()}>
+          添加
+        </button>
+      </div>
+
+      <div className="card">
+        {rows.length === 0 && <p className="muted">还没有商品，在上方添加；开单时可直接选商品自动带价。</p>}
         {rows.map((p) => (
           <div className="brow" key={p.id}>
             {editId === p.id ? (
@@ -196,47 +237,6 @@ export default function Products({ data }: { data: AppData }) {
             )}
           </div>
         ))}
-      </div>
-
-      <div className="card">
-        <h3>新增商品</h3>
-        <div className="qgrid">
-          <label>
-            名称
-            <input placeholder="商品名称" value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <label>
-            单位（可选）
-            <input placeholder="个 / kg" value={unit} onChange={(e) => setUnit(e.target.value)} />
-          </label>
-          <label>
-            进价（元，可选）
-            <input inputMode="decimal" placeholder="0.00" value={cost} onChange={(e) => setCost(e.target.value)} />
-          </label>
-          <label>
-            售价（元，可选）
-            <input inputMode="decimal" placeholder="0.00" value={sale} onChange={(e) => setSale(e.target.value)} />
-          </label>
-        </div>
-        <label className="chkline">
-          <input type="checkbox" checked={quoteOnly} onChange={(e) => setQuoteOnly(e.target.checked)} /> 纯报价 / 服务（不做库存追踪、不进成本，如设计费/打样费）
-        </label>
-        {!quoteOnly && (
-          <div className="qgrid" style={{ marginTop: 4 }}>
-            <label>
-              期初库存数量（可选）
-              <input inputMode="decimal" placeholder="0" value={openQty} onChange={(e) => setOpenQty(e.target.value)} />
-            </label>
-            <label>
-              期初单价（元，留空用进价）
-              <input inputMode="decimal" placeholder={cost.trim() || '0.00'} value={openCost} onChange={(e) => setOpenCost(e.target.value)} />
-            </label>
-          </div>
-        )}
-        {!editId && err && <p className="form-err" style={{ marginTop: 8 }}>{err}</p>}
-        <button className="btn btn-primary" style={{ marginTop: 8 }} onClick={() => void add()}>
-          添加
-        </button>
       </div>
     </>
   );

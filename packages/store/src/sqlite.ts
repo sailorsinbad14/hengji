@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { assertBalanced } from '@app/core';
-import type { Account, Book, Budget, Customer, FeeDefinition, InventoryMovement, Order, OrderStatus, PluginDocument, Posting, Product, Purchase, Reconciliation, Settlement, Supplier, Transaction } from '@app/core';
+import type { Account, Book, Budget, Customer, FeeDefinition, InventoryMovement, Order, OrderStatus, PluginDocument, Posting, Product, Purchase, Reconciliation, Settlement, StagingBatch, StagingBatchStatus, StagingRow, StagingRowStatus, Supplier, Transaction } from '@app/core';
 import type {
   AccountPatch,
   BookPatch,
@@ -12,6 +12,8 @@ import type {
   ProductPatch,
   PurchasePatch,
   Repository,
+  StagingBatchPatch,
+  StagingRowPatch,
   StoredAccount,
   StoredBook,
   StoredBudget,
@@ -25,6 +27,8 @@ import type {
   StoredReconciliation,
   StoredSetting,
   StoredSettlement,
+  StoredStagingBatch,
+  StoredStagingRow,
   StoredSupplier,
   StoredTransaction,
   SupplierPatch,
@@ -49,6 +53,8 @@ import {
   toReconciliation,
   toSetting,
   toSettlement,
+  toStagingBatch,
+  toStagingRow,
   toSupplier,
   toTxn,
 } from './schema';
@@ -69,6 +75,8 @@ import type {
   ReconciliationRow,
   SettingRow,
   SettlementRow,
+  StagingBatchRow,
+  StagingRowRow,
   SupplierRow,
   TxnRow,
 } from './schema';
@@ -84,6 +92,8 @@ const defaultClock: Clock = () => new Date().toISOString();
 export class SqliteRepository implements Repository {
   private readonly db: DatabaseSync;
   private readonly now: Clock;
+  /** 当前事务嵌套深度（>0 即在事务内）：让内部 tx() 与外层 transaction() 复用同一把 BEGIN，不嵌套。 */
+  private txDepth = 0;
 
   constructor(path = ':memory:', opts: { now?: Clock } = {}) {
     this.now = opts.now ?? defaultClock;
@@ -106,7 +116,9 @@ export class SqliteRepository implements Repository {
   }
 
   private tx<T>(fn: () => T): T {
+    if (this.txDepth > 0) return fn(); // 已在事务内：复用外层 BEGIN，不嵌套
     this.db.exec('BEGIN');
+    this.txDepth++;
     try {
       const r = fn();
       this.db.exec('COMMIT');
@@ -114,6 +126,25 @@ export class SqliteRepository implements Repository {
     } catch (e) {
       this.db.exec('ROLLBACK');
       throw e;
+    } finally {
+      this.txDepth--;
+    }
+  }
+
+  /** 跨方法原子事务（增量2）：BEGIN → await fn → COMMIT；fn 抛错 ROLLBACK。可重入（嵌套并入外层）。 */
+  async transaction<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.txDepth > 0) return fn();
+    this.db.exec('BEGIN');
+    this.txDepth++;
+    try {
+      const r = await fn();
+      this.db.exec('COMMIT');
+      return r;
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    } finally {
+      this.txDepth--;
     }
   }
 
@@ -241,10 +272,10 @@ export class SqliteRepository implements Repository {
     this.tx(() => {
       this.db
         .prepare(
-          `INSERT INTO transactions (id, book_id, date, payee, note, tags, created_at, updated_at, deleted)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          `INSERT INTO transactions (id, book_id, date, payee, note, tags, order_id, created_at, updated_at, deleted)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
         )
-        .run(txn.id, txn.bookId, txn.date, txn.payee, txn.note, JSON.stringify(txn.tags), ts, ts);
+        .run(txn.id, txn.bookId, txn.date, txn.payee, txn.note, JSON.stringify(txn.tags), txn.orderId ?? null, ts, ts);
       this.insertPostings(txn.id, txn.postings);
     });
     return (await this.getTransaction(txn.id))!;
@@ -288,6 +319,10 @@ export class SqliteRepository implements Repository {
     if (query.accountId) {
       cond.push('EXISTS (SELECT 1 FROM postings p WHERE p.txn_id = t.id AND p.account_id = ?)');
       params.push(query.accountId);
+    }
+    if (query.orderId) {
+      cond.push('t.order_id = ?');
+      params.push(query.orderId);
     }
     const sql = `SELECT t.* FROM transactions t WHERE ${cond.join(' AND ')} ORDER BY t.date DESC, t.created_at DESC, t.id DESC`;
     let rows = this.db.prepare(sql).all(...params) as unknown as TxnRow[];
@@ -593,6 +628,13 @@ export class SqliteRepository implements Repository {
     return (await this.getOrder(id))!;
   }
 
+  async softDeleteOrder(id: string): Promise<void> {
+    if (!this.db.prepare('SELECT 1 FROM orders WHERE id = ? AND deleted = 0').get(id)) {
+      throw new Error(`订单不存在：${id}`);
+    }
+    this.db.prepare('UPDATE orders SET deleted = 1, updated_at = ? WHERE id = ?').run(this.now(), id);
+  }
+
   // ---- 生意：收款 ----
   async addSettlement(settlement: Settlement): Promise<StoredSettlement> {
     if (this.db.prepare('SELECT 1 FROM settlements WHERE id = ?').get(settlement.id)) {
@@ -639,11 +681,18 @@ export class SqliteRepository implements Repository {
     return (await this.getSettlement(settlement.id))!;
   }
 
-  private async getSettlement(id: string): Promise<StoredSettlement | null> {
+  async getSettlement(id: string): Promise<StoredSettlement | null> {
     const r = this.db.prepare('SELECT * FROM settlements WHERE id = ? AND deleted = 0').get(id) as
       | SettlementRow
       | undefined;
     return r ? toSettlement(r) : null;
+  }
+
+  async softDeleteSettlement(id: string): Promise<void> {
+    if (!this.db.prepare('SELECT 1 FROM settlements WHERE id = ? AND deleted = 0').get(id)) {
+      throw new Error(`收款不存在：${id}`);
+    }
+    this.db.prepare('UPDATE settlements SET deleted = 1, updated_at = ? WHERE id = ?').run(this.now(), id);
   }
 
   async listSettlements(
@@ -805,6 +854,109 @@ export class SqliteRepository implements Repository {
     this.db.prepare('UPDATE plugin_documents SET deleted = 1, updated_at = ? WHERE id = ?').run(this.now(), id);
   }
 
+  // ---- 导入复核台脊梁（账单导入 增量1·②）----
+  private assertStagingBatch(id: string): void {
+    if (!this.db.prepare('SELECT 1 FROM staging_batches WHERE id = ? AND deleted = 0').get(id)) {
+      throw new Error(`导入批次不存在：${id}`);
+    }
+  }
+
+  private async getStagingBatch(id: string): Promise<StoredStagingBatch | null> {
+    const r = this.db.prepare('SELECT * FROM staging_batches WHERE id = ? AND deleted = 0').get(id) as StagingBatchRow | undefined;
+    return r ? toStagingBatch(r) : null;
+  }
+
+  private async getStagingRow(id: string): Promise<StoredStagingRow | null> {
+    const r = this.db.prepare('SELECT * FROM staging_rows WHERE id = ? AND deleted = 0').get(id) as StagingRowRow | undefined;
+    return r ? toStagingRow(r) : null;
+  }
+
+  async addStagingBatch(batch: StagingBatch): Promise<StoredStagingBatch> {
+    if (this.db.prepare('SELECT 1 FROM staging_batches WHERE id = ?').get(batch.id)) throw new Error(`导入批次已存在：${batch.id}`);
+    const ts = this.now();
+    this.db
+      .prepare(`INSERT INTO staging_batches (id, source, account_id, label, status, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, 0)`)
+      .run(batch.id, batch.source, batch.accountId, batch.label, batch.status, ts, ts);
+    return (await this.getStagingBatch(batch.id))!;
+  }
+
+  async addStagingRows(rows: StagingRow[]): Promise<StoredStagingRow[]> {
+    if (rows.length === 0) return [];
+    const ts = this.now();
+    this.tx(() => {
+      const seen = new Set<string>();
+      const stmt = this.db.prepare(
+        `INSERT INTO staging_rows (id, batch_id, biz_no, date, datetime, amount_minor, direction, payee, counterparty_account, note, accounting_type, suggestion, assigned_book_id, assigned_account_id, status, txn_id, created_at, updated_at, deleted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      );
+      for (const r of rows) {
+        this.assertStagingBatch(r.batchId);
+        // 同批自撞 seen + 库内已存在——任一即整批回滚（不依赖 tx 内 read-your-writes，三实现一致）
+        if (seen.has(r.id) || this.db.prepare('SELECT 1 FROM staging_rows WHERE id = ?').get(r.id)) throw new Error(`导入草稿行已存在：${r.id}`);
+        seen.add(r.id);
+        stmt.run(r.id, r.batchId, r.bizNo, r.date, r.datetime, r.amountMinor, r.direction, r.payee, r.counterpartyAccount, r.note, r.accountingType, r.suggestion, r.assignedBookId, r.assignedAccountId, r.status, r.txnId, ts, ts);
+      }
+    });
+    const out: StoredStagingRow[] = [];
+    for (const r of rows) out.push((await this.getStagingRow(r.id))!);
+    return out;
+  }
+
+  async listStagingBatches(query: { status?: StagingBatchStatus } = {}): Promise<StoredStagingBatch[]> {
+    const cond = ['deleted = 0'];
+    const params: string[] = [];
+    if (query.status) {
+      cond.push('status = ?');
+      params.push(query.status);
+    }
+    const rows = this.db.prepare(`SELECT * FROM staging_batches WHERE ${cond.join(' AND ')}`).all(...params) as unknown as StagingBatchRow[];
+    return rows.map(toStagingBatch);
+  }
+
+  async listStagingRows(query: { batchId?: string; status?: StagingRowStatus; bizNos?: string[] } = {}): Promise<StoredStagingRow[]> {
+    const cond = ['deleted = 0'];
+    const params: string[] = [];
+    if (query.batchId) {
+      cond.push('batch_id = ?');
+      params.push(query.batchId);
+    }
+    if (query.status) {
+      cond.push('status = ?');
+      params.push(query.status);
+    }
+    if (query.bizNos) {
+      if (query.bizNos.length === 0) return [];
+      // 分片避免 IN 占位符超 SQLite 变量上限
+      const out: StoredStagingRow[] = [];
+      for (const part of chunk(query.bizNos, 500)) {
+        const ph = part.map(() => '?').join(', ');
+        const rows = this.db.prepare(`SELECT * FROM staging_rows WHERE ${cond.join(' AND ')} AND biz_no IN (${ph})`).all(...params, ...part) as unknown as StagingRowRow[];
+        out.push(...rows.map(toStagingRow));
+      }
+      return out;
+    }
+    const rows = this.db.prepare(`SELECT * FROM staging_rows WHERE ${cond.join(' AND ')}`).all(...params) as unknown as StagingRowRow[];
+    return rows.map(toStagingRow);
+  }
+
+  async updateStagingBatch(id: string, patch: StagingBatchPatch): Promise<StoredStagingBatch> {
+    const cur = await this.getStagingBatch(id);
+    if (!cur) throw new Error(`导入批次不存在：${id}`);
+    const next: StoredStagingBatch = { ...cur, ...patch, updatedAt: this.now() };
+    this.db.prepare(`UPDATE staging_batches SET label=?, status=?, updated_at=? WHERE id=?`).run(next.label, next.status, next.updatedAt, id);
+    return (await this.getStagingBatch(id))!;
+  }
+
+  async updateStagingRow(id: string, patch: StagingRowPatch): Promise<StoredStagingRow> {
+    const cur = await this.getStagingRow(id);
+    if (!cur) throw new Error(`导入草稿行不存在：${id}`);
+    const next: StoredStagingRow = { ...cur, ...patch, updatedAt: this.now() };
+    this.db
+      .prepare(`UPDATE staging_rows SET assigned_book_id=?, assigned_account_id=?, suggestion=?, status=?, txn_id=?, updated_at=? WHERE id=?`)
+      .run(next.assignedBookId, next.assignedAccountId, next.suggestion, next.status, next.txnId, next.updatedAt, id);
+    return (await this.getStagingRow(id))!;
+  }
+
   // ---- 生意：代采采购单（C2d）----
   private insertPurchaseLines(purchaseId: string, lines: Purchase['lines']): void {
     const stmt = this.db.prepare(`INSERT INTO purchase_lines (id, purchase_id, name, qty, unit_cost, product_id) VALUES (?, ?, ?, ?, ?, ?)`);
@@ -950,6 +1102,13 @@ export class SqliteRepository implements Repository {
       .prepare(`SELECT * FROM inventory_movements WHERE ${cond.join(' AND ')} ORDER BY date DESC, created_at DESC, id DESC`)
       .all(...params) as unknown as InventoryMovementRow[];
     return rows.map(toInventoryMovement);
+  }
+
+  async softDeleteInventoryMovement(id: string): Promise<void> {
+    if (!this.db.prepare('SELECT 1 FROM inventory_movements WHERE id = ? AND deleted = 0').get(id)) {
+      throw new Error(`库存流水不存在：${id}`);
+    }
+    this.db.prepare('UPDATE inventory_movements SET deleted = 1, updated_at = ? WHERE id = ?').run(this.now(), id);
   }
 
   // ---- 设置（KV）----

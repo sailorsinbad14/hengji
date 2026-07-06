@@ -26,6 +26,12 @@
  *   既有账户默认 0（账本专属、行为不变）；纯新增列。全局账户余额归全局资金池、对账按账户跨账本。
  * - m15：额外费用+公式引擎（C2 Step 4）。fee_definitions 表（账本级声明式阶梯费用）+ order_lines.fee_ids 列；纯新增。
  * - m16：插件地基（north-star Step 1）。plugin_documents 表（声明式单据实例：data + txn_ids JSON）；纯新增。
+ * - m17：导入复核台脊梁（账单导入 增量1·②）。staging_batches（一次导入的批次：来源/源账户/状态）+
+ *   staging_rows（逐笔草稿行：标准化字段 + 复核决定）。通用 staging——将来对账/OCR/语音/AI 复用，
+ *   但列只放导入现用的。biz_no 建索引：再导去重 + 落库中断自愈。纯新增表，不动既有数据。
+ * - m18：撤销原语地基（账单导入 增量2·M18a）。transactions 加 order_id 列——订单完成时生成的
+ *   收入/COGS/代采结转分录都回填，撤销订单时一把捞全（解决代采结转分录无处可查的孤儿引用）。
+ *   既有交易默认 NULL（=非订单完成分录）；纯新增列，不动既有数据。
  */
 
 export interface SqlRunner {
@@ -349,7 +355,51 @@ const M16: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_plugin_documents_book ON plugin_documents(book_id)`,
 ];
 
-export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12, M13, M14, M15, M16];
+// m17：导入复核台脊梁（账单导入 增量1·②）。staging_batches=一次导入批次；staging_rows=逐笔草稿行
+// （标准化解析字段 + 复核决定列）。通用 staging（source 字段 + staging_* 命名，将来对账/OCR/语音/AI
+// 复用），但列只放导入现用的（YAGNI，不预建专用列）。biz_no 建索引：再导去重、落库中断据此自愈。纯新增表。
+const M17: string[] = [
+  `CREATE TABLE IF NOT EXISTS staging_batches (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'reviewing',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE TABLE IF NOT EXISTS staging_rows (
+    id TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL,
+    biz_no TEXT NOT NULL,
+    date TEXT NOT NULL,
+    datetime TEXT NOT NULL DEFAULT '',
+    amount_minor INTEGER NOT NULL,
+    direction TEXT NOT NULL,
+    payee TEXT NOT NULL DEFAULT '',
+    counterparty_account TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    accounting_type TEXT NOT NULL DEFAULT '',
+    suggestion TEXT NOT NULL,
+    assigned_book_id TEXT,
+    assigned_account_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    txn_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (batch_id) REFERENCES staging_batches(id) ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_staging_rows_batch ON staging_rows(batch_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_staging_rows_bizno ON staging_rows(biz_no)`,
+];
+
+// m18：撤销原语地基（账单导入 增量2·M18a）。transactions.order_id 标记订单完成生成的分录（收入/COGS/代采结转），
+// 撤销订单据此一把捞全（含此前无处可查的代采结转孤儿）。既有交易回落 NULL；纯新增列。
+const M18: string[] = [`ALTER TABLE transactions ADD COLUMN order_id TEXT`];
+
+export const MIGRATIONS: ReadonlyArray<ReadonlyArray<string>> = [M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12, M13, M14, M15, M16, M17, M18];
 
 export async function migrate(r: SqlRunner): Promise<void> {
   const v = await r.getVersion();
