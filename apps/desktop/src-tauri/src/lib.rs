@@ -1,5 +1,6 @@
 mod crypto;
 mod db;
+mod llm;
 mod ocr;
 
 use std::sync::Mutex;
@@ -24,6 +25,10 @@ pub fn run() {
             crypto::lock,
             crypto::export_backup,
             crypto::wipe_data,
+            llm::llm_key_status,
+            llm::llm_set_key,
+            llm::llm_clear_key,
+            llm::llm_complete,
             ocr::ocr_image,
         ])
         .run(tauri::generate_context!())
