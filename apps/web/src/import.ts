@@ -1,7 +1,9 @@
 import { expandEntry, stagingRowToEntry } from '@app/core';
 import type { ImportDraftRow, StagingPostDecision, StagingRow } from '@app/core';
-import type { Repository, StoredStagingBatch, StoredStagingRow } from '@app/store';
+import type { Repository, StoredBook, StoredStagingBatch, StoredStagingRow } from '@app/store';
 import { genId } from './db';
+import { removeSettlement, settleStagingRow } from './biz';
+import type { SettleTarget } from './biz';
 import { APP_SCOPE } from './settings';
 
 /**
@@ -19,6 +21,11 @@ import { APP_SCOPE } from './settings';
 /** 由草稿行 id 确定性派生交易 id：落库中断重跑时据此判「已落」、不重复落。 */
 function txnIdForRow(rowId: string): string {
   return `imp_${rowId}`;
+}
+
+/** 由草稿行 id 确定性派生核销 Settlement id：整批撤销据此定位（无孤儿）、自愈重跑不重复建。 */
+function settlementIdForRow(rowId: string): string {
+  return `set_${rowId}`;
 }
 
 /** 已 posted 且属于该 source 的 biz_no 集合（复合键去重 + 崩溃自愈共用）。 */
@@ -96,25 +103,68 @@ export async function createImportBatch(repo: Repository, info: NewBatchInfo, ro
  */
 export async function postStagingRow(repo: Repository, batch: StoredStagingBatch, row: StoredStagingRow, decision: StagingPostDecision): Promise<StoredStagingRow> {
   const txnId = txnIdForRow(row.id);
-  const existing = await repo.getTransaction(txnId);
-  if (!existing) {
-    const input = stagingRowToEntry(row, decision, batch.accountId);
-    let firstCall = true;
-    const gen = (): string => {
-      if (firstCall) {
-        firstCall = false;
-        return txnId; // 交易 id＝确定性派生；分录 id 随机
-      }
-      return genId();
-    };
-    await repo.addTransaction(expandEntry(input, gen));
-  }
-  return repo.updateStagingRow(row.id, {
-    assignedBookId: decision.bookId,
-    assignedAccountId: decision.accountId,
-    suggestion: decision.kind,
-    status: 'posted',
-    txnId,
+  // 原子：落库 + 回填行同事务——否则「交易已 commit 但行未置 posted」窗口里，用户把该行改走另一出口重 post，
+  // 会因 imp_<rowId> 命名空间共用被另一出口误判已落而留 split-brain（账本与行元数据脱钩）。同事务后该窗口不存在。
+  return repo.transaction(async () => {
+    const existing = await repo.getTransaction(txnId);
+    if (!existing) {
+      const input = stagingRowToEntry(row, decision, batch.accountId);
+      let firstCall = true;
+      const gen = (): string => {
+        if (firstCall) {
+          firstCall = false;
+          return txnId; // 交易 id＝确定性派生；分录 id 随机
+        }
+        return genId();
+      };
+      await repo.addTransaction(expandEntry(input, gen));
+    }
+    return repo.updateStagingRow(row.id, {
+      assignedBookId: decision.bookId,
+      assignedAccountId: decision.accountId,
+      suggestion: decision.kind,
+      status: 'posted',
+      txnId,
+    });
+  });
+}
+
+/**
+ * 出口①：核销落库一条已复核的草稿行（对偶撤销在 revertImportBatch 走 removeSettlement）——
+ * 不造裸收支 entry，而是把流水核销到已有客户/供应商应收/应付（建核销分录 + Settlement）。
+ * 自愈：交易 id 确定性派生（imp_<rowId>）、Settlement id 确定性派生（set_<rowId>）；交易已存在则跳过新建、只补回填。
+ * 收/付款资产账户恒取批次源账户（这笔流水本就进出该账户）。
+ */
+export async function settleImportRow(repo: Repository, batch: StoredStagingBatch, book: StoredBook, row: StoredStagingRow, target: SettleTarget): Promise<StoredStagingRow> {
+  const txnId = txnIdForRow(row.id);
+  // 原子：核销 + 回填行同事务（与 postStagingRow 同理，消除「已 commit 但行未 posted」窗口致的跨出口 split-brain）。
+  return repo.transaction(async () => {
+    const existing = await repo.getTransaction(txnId);
+    if (!existing) {
+      let firstCall = true;
+      const gen = (): string => {
+        if (firstCall) {
+          firstCall = false;
+          return txnId; // 交易 id＝确定性派生；分录 id 随机
+        }
+        return genId();
+      };
+      await settleStagingRow(repo, book, {
+        direction: row.direction,
+        target: { ...target, assetAccountId: batch.accountId }, // 资产账户恒＝批次源账户（单一真相）
+        amount: row.amountMinor,
+        date: row.date,
+        note: row.note,
+        idGen: gen,
+        settlementId: settlementIdForRow(row.id),
+      });
+    }
+    return repo.updateStagingRow(row.id, {
+      assignedBookId: book.id,
+      assignedAccountId: batch.accountId,
+      status: 'posted',
+      txnId,
+    });
   });
 }
 
@@ -125,18 +175,32 @@ export function skipStagingRow(repo: Repository, rowId: string): Promise<StoredS
 
 /**
  * 整批撤销：软删该批所有 posted 行生成的交易（余额回退）+ 逐行退出 posted（置 skipped、清 txnId）+ 批次置 reverted。
+ * - 裸收支行：软删其交易。**核销行（出口①）**：走 `removeSettlement`（反向分录 + 软删 Settlement，原子）——
+ *   不可裸软删交易，否则留指向已撤分录的 Settlement 孤儿、应收/应付回退不净。核销行据 `set_<rowId>` 定位。
  * - 退出 posted 是红线——否则死交易的 biz_no 仍在去重集，重导同账单会被误判已落而吞掉。
  * - 行置 **skipped 终态**（非回 pending）：撤销后该批草稿不再复核/重 post；要重做请**重新导入**——
  *   生成全新行 + 全新确定性交易 id，避开 `imp_<rowId>` 与已软删墓碑相撞致 addTransaction 报「已存在」。
+ * @param today 撤销当期日期：核销行若已对账(cleared)走红冲、冲正落此日（裸收支/未对账行不用）。
  */
-export async function revertImportBatch(repo: Repository, batchId: string): Promise<void> {
+export async function revertImportBatch(repo: Repository, batchId: string, today: string): Promise<void> {
   const posted = await repo.listStagingRows({ batchId, status: 'posted' });
   for (const r of posted) {
-    if (r.txnId) {
-      const txn = await repo.getTransaction(r.txnId);
-      if (txn && !txn.deleted) await repo.softDeleteTransaction(r.txnId);
-    }
-    await repo.updateStagingRow(r.id, { status: 'skipped', txnId: null });
+    // 每行整段撤销（分类 + 回退 + 退出 posted）同事务——否则在「Settlement 已软删但行仍 posted」的中断窗口里，
+    // 重入会因 getSettlement(set_<id>) 返 null 把核销行误判为裸收支行，对已对账(cleared)行的红冲后存活原交易再软删＝二次回退。
+    await repo.transaction(async () => {
+      if (r.txnId) {
+        const settlement = await repo.getSettlement(settlementIdForRow(r.id));
+        if (settlement) {
+          // 核销行：撤核销（reverseTxn 软删/红冲 + 软删 Settlement，原子、幂等）
+          await removeSettlement(repo, settlement.id, { date: today });
+        } else {
+          // 裸收支行：软删其交易
+          const txn = await repo.getTransaction(r.txnId);
+          if (txn && !txn.deleted) await repo.softDeleteTransaction(r.txnId);
+        }
+      }
+      await repo.updateStagingRow(r.id, { status: 'skipped', txnId: null });
+    });
   }
   await repo.updateStagingBatch(batchId, { status: 'reverted' });
 }

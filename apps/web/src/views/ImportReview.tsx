@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { StagingPostDecision } from '@app/core';
 import type { Repository, StoredAccount, StoredBook, StoredStagingBatch, StoredStagingRow } from '@app/store';
-import { fmtMoney } from '../format';
+import { fmtMoney, todayISO } from '../format';
 import {
   createImportBatch,
   loadCounterpartyMemory,
@@ -9,9 +9,12 @@ import {
   recallCounterparty,
   rememberCounterparties,
   revertImportBatch,
+  settleImportRow,
   skipStagingRow,
 } from '../import';
 import type { CounterpartyMemory } from '../import';
+import { suggestImportSettlements } from '../biz';
+import type { SettleSuggestion } from '../biz';
 import { parseImportFile, SOURCE_LABELS } from '../import-files';
 import type { ImportSource } from '../import-files';
 import { parseOcrImageFile } from '../import-ocr';
@@ -23,12 +26,16 @@ const srcLabel = (s: string): string => (s === 'ocr' ? '图片识别（OCR）' :
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 type Kind = StagingPostDecision['kind'];
+/** 出口（增量3）：plain＝裸收支（现有 kind 路径）；settle＝核销已有应收/应付。draft（建草稿）后置 M18。 */
+type Outlet = 'plain' | 'settle';
 interface RowDecision {
   bookId: string;
   kind: Kind | '';
   accountId: string;
   /** 可编辑日期（OCR 草稿可能未识别日期；落库前须为合法 YYYY-MM-DD）。 */
   date: string;
+  /** 出口路由：有核销建议默认 settle，否则 plain。 */
+  outlet: Outlet;
 }
 
 const KIND_OPTS: Array<[Kind, string]> = [
@@ -87,6 +94,7 @@ export default function ImportReview({
   const [active, setActive] = useState<StoredStagingBatch | null>(null);
   const [rows, setRows] = useState<StoredStagingRow[]>([]);
   const [decisions, setDecisions] = useState<Record<string, RowDecision>>({});
+  const [suggestions, setSuggestions] = useState<Record<string, SettleSuggestion>>({}); // 出口①核销建议（rowId → 建议）
   const [mem, setMem] = useState<CounterpartyMemory>({});
   const [payeeFilter, setPayeeFilter] = useState<string | null>(null); // 「筛选同名」：只看某对方的待复核行
 
@@ -113,7 +121,7 @@ export default function ImportReview({
 
   function setDec(rowId: string, patch: Partial<RowDecision>): void {
     setDecisions((d) => {
-      const cur = d[rowId] ?? { bookId: '', kind: '', accountId: '', date: '' };
+      const cur = d[rowId] ?? { bookId: '', kind: '', accountId: '', date: '', outlet: 'plain' };
       const next: RowDecision = { ...cur, ...patch };
       // 改 kind / 账本 → 旧科目可能不在新选项里，清空待重选
       if ((patch.kind !== undefined && patch.kind !== cur.kind) || (patch.bookId !== undefined && patch.bookId !== cur.bookId)) {
@@ -188,6 +196,16 @@ export default function ImportReview({
   async function openBatch(b: StoredStagingBatch): Promise<void> {
     const r = await repo.listStagingRows({ batchId: b.id, status: 'pending' });
     const m = await loadCounterpartyMemory(repo);
+    // 出口①：逐行算核销建议（对方名精确命中客户/供应商 + 有未结清 → 建议核销）。生活账本自然无建议。
+    const sugMap = await suggestImportSettlements(
+      repo,
+      books,
+      r.map((row) => ({ id: row.id, direction: row.direction, payee: row.payee, amountMinor: row.amountMinor })),
+      b.accountId,
+      todayISO(),
+    );
+    const sugObj: Record<string, SettleSuggestion> = {};
+    sugMap.forEach((v, k) => { sugObj[k] = v; });
     const init: Record<string, RowDecision> = {};
     for (const row of r) {
       const recalled = recallCounterparty(m, row.payee);
@@ -195,7 +213,7 @@ export default function ImportReview({
       let bookId = recalled?.bookId ?? '';
       let accountId = recalled?.accountId ?? '';
       // 校验记忆预填：账本须仍活跃、对手腿须在「当前 kind+账本」可选集内，否则清空——
-      // 防受控 select 显示为空但 state 仍持旧 id，被 complete() 当已指派而静默错记（如收入科目落成支出/转账腿）。
+      // 防受控 select 显示为空但 state 仍持旧 id，被 plainComplete() 当已指派而静默错记（如收入科目落成支出/转账腿）。
       if (bookId && !books.some((bk) => bk.id === bookId)) {
         bookId = '';
         accountId = '';
@@ -203,19 +221,28 @@ export default function ImportReview({
       if (accountId && !accountsFor(kind, bookId, b.accountId).some((a) => a.id === accountId)) {
         accountId = '';
       }
-      init[row.id] = { kind, bookId, accountId, date: row.date };
+      // 有核销建议 → 默认预选核销（用户拍板：匹配是建议、postAll 才落库＝仍是确认非静默；保留一键改裸收支）。
+      init[row.id] = { kind, bookId, accountId, date: row.date, outlet: sugObj[row.id] ? 'settle' : 'plain' };
     }
     setMem(m); // 与「套用同类全填」共用同一记忆快照（本批开台即载入）
+    setSuggestions(sugObj);
     setPayeeFilter(null);
     setActive(b);
     setRows(r);
     setDecisions(init);
   }
 
-  function complete(d: RowDecision | undefined): boolean {
+  /** 裸收支出口齐活：类型 + 账本 + 对手腿账户 + 合法日期。 */
+  function plainComplete(d: RowDecision | undefined): boolean {
     return !!d && !!d.kind && !!d.bookId && !!d.accountId && ISO_DATE.test(d.date);
   }
-  const assignedCount = rows.filter((r) => complete(decisions[r.id])).length;
+  /** 一行是否可入账（按出口分叉）：settle＝有核销建议 + 合法日期；plain＝plainComplete。 */
+  function ready(rowId: string, d: RowDecision | undefined): boolean {
+    if (!d) return false;
+    if (d.outlet === 'settle') return !!suggestions[rowId] && ISO_DATE.test(d.date);
+    return plainComplete(d);
+  }
+  const assignedCount = rows.filter((r) => ready(r.id, decisions[r.id])).length;
 
   // 同名笔数（≥2 才给「筛选同名」入口；单笔无须筛）
   const payeeCounts = useMemo(() => {
@@ -230,8 +257,9 @@ export default function ImportReview({
   // 展示用行集：先按「筛选同名」过滤，再「未复核在上、已复核沉底」稳定排序（只动展示、不改 rows 源序与落库范围）
   const viewRows = useMemo(() => {
     const base = payeeFilter ? rows.filter((r) => r.payee.trim() === payeeFilter) : rows;
-    return [...base].sort((a, b) => Number(complete(decisions[a.id])) - Number(complete(decisions[b.id])));
-  }, [rows, payeeFilter, decisions]);
+    return [...base].sort((a, b) => Number(ready(a.id, decisions[a.id])) - Number(ready(b.id, decisions[b.id])));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, payeeFilter, decisions, suggestions]);
 
   /**
    * 顶部「套用同类全填」：把本批每条**未完成**待复核行的 账本 + 对手腿账户，用「同一对方」的模板填上。
@@ -247,14 +275,15 @@ export default function ImportReview({
     for (const row of rows) {
       const d = decisions[row.id];
       const p = row.payee.trim();
-      if (p && complete(d) && !tpl.has(p)) tpl.set(p, { bookId: d!.bookId, accountId: d!.accountId });
+      // 模板只取裸收支已填好的行：核销(settle)行无 bookId+科目语义、不作模板。
+      if (p && d?.outlet !== 'settle' && plainComplete(d) && !tpl.has(p)) tpl.set(p, { bookId: d!.bookId, accountId: d!.accountId });
     }
     const next: Record<string, RowDecision> = { ...decisions };
     let filled = 0;
     let hadIncomplete = false;
     for (const row of scope) {
-      const cur: RowDecision = next[row.id] ?? { bookId: '', kind: '', accountId: '', date: row.date };
-      if (complete(cur)) continue; // 不动已填好的行
+      const cur: RowDecision = next[row.id] ?? { bookId: '', kind: '', accountId: '', date: row.date, outlet: 'plain' };
+      if (cur.outlet === 'settle' || plainComplete(cur)) continue; // 核销行不套用裸收支模板；已填好的行不动
       hadIncomplete = true;
       // 类型恒取解析器（或用户已选），不读记忆 → 划转方向永不被翻转（红线）。
       // 解析器拿不准的「待定」行（转账/红包，kind=''）整行跳过：缺类型无法选对手账户，半填只会误导。
@@ -278,7 +307,7 @@ export default function ImportReview({
       }
     }
     setDecisions(next);
-    const remaining = scope.filter((r) => !complete(next[r.id])).length;
+    const remaining = scope.filter((r) => !ready(r.id, next[r.id])).length;
     if (filled > 0) {
       setMsg(`已按同名 / 历史记忆套用 ${filled} 行（类型仍按账单，账户已校验）${remaining ? `，仍有 ${remaining} 行待指派` : ''}。`);
     } else if (!hadIncomplete) {
@@ -292,20 +321,31 @@ export default function ImportReview({
     if (!active) return;
     setBusy(true);
     const remembers: Array<{ payee: string; bookId: string; accountId: string }> = [];
+    // 建议是开台时一次性快照、不随本批已核销递减。同批多条核销同一张应收单时，第二条若仍指同一 orderId，会把它顶到该单
+    // 溢出为预收；这里对「本批已占用的 orderId」去重——后续重复者降级为 orderId=null 走客户级 FIFO，自然摊到下一张欠款单（更准）。
+    const consumedOrderIds = new Set<string>();
     let posted = 0;
     let failed = 0;
     for (const row of rows) {
       const d = decisions[row.id];
-      if (!complete(d)) continue;
+      if (!ready(row.id, d)) continue;
       try {
-        // 用复核台编辑后的日期落库（OCR 可能未识别日期 → 用户补填；core stagingRowToEntry 兜死非法日期）。
-        await postStagingRow(repo, active, { ...row, date: d!.date }, { kind: d!.kind as Kind, bookId: d!.bookId, accountId: d!.accountId });
-        posted++;
-        // 记住「对方 → 账本 + 对手腿账户」：四种类型都记（含内部划转的对手资金账户），下次导入自动预填——P2 持久对方记忆。
-        // 类型不入记忆（恒按账单解析器定），故划转方向永不被记忆翻转（红线）。
-        // v1 取舍：记忆按对方单槽、后写覆盖（见 import.ts）——同一对方既划转又收支时后者覆盖前者的预填，
-        // 仅影响预填便利、不影响记账正确（错腿账户会被 openBatch/套用 的合法性校验清掉，绝不错记）。
-        remembers.push({ payee: row.payee, bookId: d!.bookId, accountId: d!.accountId });
+        // 用复核台编辑后的日期落库（OCR 可能未识别日期 → 用户补填；core 兜死非法日期）。
+        if (d!.outlet === 'settle') {
+          // 出口①核销：把流水核销到已有应收/应付（不造裸收支 entry）。settle 行不写对方记忆（无 bookId+科目语义）。
+          const sug = suggestions[row.id]!;
+          const book = books.find((bk) => bk.id === sug.bookId)!;
+          const orderId = sug.orderId && !consumedOrderIds.has(sug.orderId) ? sug.orderId : null;
+          if (orderId) consumedOrderIds.add(orderId);
+          await settleImportRow(repo, active, book, { ...row, date: d!.date }, { counterpartyType: sug.counterpartyType, entityId: sug.entityId, orderId, assetAccountId: sug.assetAccountId });
+          posted++;
+        } else {
+          await postStagingRow(repo, active, { ...row, date: d!.date }, { kind: d!.kind as Kind, bookId: d!.bookId, accountId: d!.accountId });
+          posted++;
+          // 记住「对方 → 账本 + 对手腿账户」：四种 kind 都记（含内部划转的对手资金账户），下次导入自动预填——P2 持久对方记忆。
+          // 类型不入记忆（恒按账单解析器定），故划转方向永不被记忆翻转（红线）。
+          remembers.push({ payee: row.payee, bookId: d!.bookId, accountId: d!.accountId });
+        }
       } catch {
         failed++;
       }
@@ -331,7 +371,7 @@ export default function ImportReview({
   async function onRevert(b: StoredStagingBatch): Promise<void> {
     if (!confirm(`撤销「${b.label}」整批？会删除它已入账的交易（余额回退），草稿作废。要重做请重新导入。`)) return;
     setBusy(true);
-    await revertImportBatch(repo, b.id);
+    await revertImportBatch(repo, b.id, todayISO());
     if (active?.id === b.id) {
       setActive(null);
       setRows([]);
@@ -399,7 +439,7 @@ export default function ImportReview({
                   复核
                 </button>
               )}
-              <button className="lnk danger" onClick={() => void onRevert(b)}>
+              <button className="lnk danger" disabled={busy} onClick={() => void onRevert(b)}>
                 撤销整批
               </button>
             </div>
@@ -433,10 +473,12 @@ export default function ImportReview({
                 <p className="muted small">该对方已无待复核行。<button className="lnk" onClick={() => setPayeeFilter(null)}>清除筛选</button></p>
               )}
               {viewRows.map((row) => {
-                const d = decisions[row.id] ?? { bookId: '', kind: '', accountId: '', date: row.date };
+                const d: RowDecision = decisions[row.id] ?? { bookId: '', kind: '', accountId: '', date: row.date, outlet: 'plain' };
+                const sug = suggestions[row.id];
+                const isSettle = d.outlet === 'settle';
                 const acctOpts = accountsFor(d.kind, d.bookId, active.accountId);
                 const amt = row.direction === 'out' ? -row.amountMinor : row.amountMinor;
-                const done = complete(d);
+                const done = ready(row.id, d);
                 const p = row.payee.trim();
                 return (
                   <div key={row.id} className={`brow imp-row${done ? ' done' : ''}`} style={{ flexWrap: 'wrap', gap: 6, alignItems: 'center', borderTop: '1px solid var(--line, #eee)', paddingTop: 8 }}>
@@ -448,24 +490,40 @@ export default function ImportReview({
                       <span className="chip" style={{ marginLeft: 6 }}>{SUGGEST_LABEL[row.suggestion] ?? row.suggestion}</span>
                     </span>
                     <span className={`bnum${amt < 0 ? ' neg' : ''}`} style={{ width: 96, textAlign: 'right' }}>{fmtMoney(amt)}</span>
-                    <select value={d.bookId} onChange={(e) => setDec(row.id, { bookId: e.target.value })}>
-                      <option value="">选账本…</option>
-                      {books.map((b) => (
-                        <option key={b.id} value={b.id}>{b.name}</option>
-                      ))}
-                    </select>
-                    <select value={d.kind} onChange={(e) => setDec(row.id, { kind: e.target.value as Kind })}>
-                      <option value="">类型…</option>
-                      {KIND_OPTS.map(([k, label]) => (
-                        <option key={k} value={k}>{label}</option>
-                      ))}
-                    </select>
-                    <select value={d.accountId} onChange={(e) => setDec(row.id, { accountId: e.target.value })} disabled={!d.kind || !d.bookId}>
-                      <option value="">{d.kind === 'income' || d.kind === 'expense' ? '选分类…' : '选对手账户…'}</option>
-                      {acctOpts.map((a) => (
-                        <option key={a.id} value={a.id}>{a.name}</option>
-                      ))}
-                    </select>
+                    {/* 出口路由：仅当有核销建议（命中客户/供应商且有未结清）才出现；生意账本以外的行无此控件。 */}
+                    {sug && (
+                      <select value={d.outlet} onChange={(e) => setDec(row.id, { outlet: e.target.value as Outlet })} title="这笔生意流水的去向">
+                        <option value="settle">核销</option>
+                        <option value="plain">裸收支</option>
+                        <option value="draft" disabled>建单据草稿（即将推出）</option>
+                      </select>
+                    )}
+                    {isSettle && sug ? (
+                      <span className="chip" style={{ minWidth: 200, background: 'var(--bg-accent, #eef2ff)' }} title={sug.matchedExact ? '金额与某单据相等，已预选核销该单' : '金额非整单，按最早欠款优先核销'}>
+                        核销 → {sug.entityName} · {row.direction === 'in' ? '应收' : '应付'} {fmtMoney(sug.outstandingTotal)}{sug.orderId ? ' · 指定订单' : ' · 最早欠款优先'}
+                      </span>
+                    ) : (
+                      <>
+                        <select value={d.bookId} onChange={(e) => setDec(row.id, { bookId: e.target.value })}>
+                          <option value="">选账本…</option>
+                          {books.map((b) => (
+                            <option key={b.id} value={b.id}>{b.name}</option>
+                          ))}
+                        </select>
+                        <select value={d.kind} onChange={(e) => setDec(row.id, { kind: e.target.value as Kind })}>
+                          <option value="">类型…</option>
+                          {KIND_OPTS.map(([k, label]) => (
+                            <option key={k} value={k}>{label}</option>
+                          ))}
+                        </select>
+                        <select value={d.accountId} onChange={(e) => setDec(row.id, { accountId: e.target.value })} disabled={!d.kind || !d.bookId}>
+                          <option value="">{d.kind === 'income' || d.kind === 'expense' ? '选分类…' : '选对手账户…'}</option>
+                          {acctOpts.map((a) => (
+                            <option key={a.id} value={a.id}>{a.name}</option>
+                          ))}
+                        </select>
+                      </>
+                    )}
                     {!payeeFilter && p !== '' && (payeeCounts.get(p) ?? 0) >= 2 && (
                       <button className="lnk" title="只看该对方的同名流水、分组填" onClick={() => setPayeeFilter(p)}>筛选同名</button>
                     )}

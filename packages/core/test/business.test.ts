@@ -12,6 +12,8 @@ import {
   purchaseTotal,
   accountBalance,
   isBalanced,
+  matchEntityByName,
+  matchOutstandingByAmount,
   toMinor,
 } from '../src/index';
 
@@ -220,5 +222,32 @@ describe('outstandingCharges（应付 FIFO 摊还）', () => {
     expect(outstandingCharges(charges, 0)).toEqual([{ amount: 10000, date: '2026-06-01' }, { amount: 5000, date: '2026-06-05' }]);
     expect(outstandingCharges(charges, 15000)).toEqual([]); // 全清
     expect(outstandingCharges(charges, 20000)).toEqual([]); // 超额（预付）也算清
+  });
+});
+
+describe('出口① 核销匹配（增量3）', () => {
+  const ents = [
+    { id: 'c1', name: '张三' },
+    { id: 'c2', name: '李四' },
+    { id: 'c3', name: '李四' }, // 同名歧义
+  ];
+
+  it('matchEntityByName：精确 trim 命中唯一；空/无命中/歧义返 null', () => {
+    expect(matchEntityByName(' 张三 ', ents)).toBe('c1'); // trim 后精确
+    expect(matchEntityByName('张三丰', ents)).toBeNull(); // 不做模糊（包含也不算）
+    expect(matchEntityByName('', ents)).toBeNull();
+    expect(matchEntityByName('王五', ents)).toBeNull(); // 无命中
+    expect(matchEntityByName('李四', ents)).toBeNull(); // 多个同名＝歧义、不猜
+  });
+
+  it('matchOutstandingByAmount：精确等额命中、多单同额取最早、无精确返 null', () => {
+    const items = [
+      { owed: 50000, date: '2026-06-10' },
+      { owed: 30000, date: '2026-06-05' },
+      { owed: 50000, date: '2026-06-01' }, // 同额更早
+    ];
+    expect(matchOutstandingByAmount(50000, items)!.date).toBe('2026-06-01'); // 取最早
+    expect(matchOutstandingByAmount(30000, items)!.owed).toBe(30000);
+    expect(matchOutstandingByAmount(40000, items)).toBeNull(); // 无精确等额 → 按池 FIFO（orderId=null）
   });
 });

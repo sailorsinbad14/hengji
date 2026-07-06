@@ -1,4 +1,4 @@
-import { accountBalance, allocateCustomerPayments, collectionEntry, computeFees, convertAmount, creditPurchaseEntry, expandEntry, feesTotal, inventoryState, lineTotal, orderRevenueEntry, orderTotal, planInventoryIssue, purchaseTotal, removalIsTail, reversalEntry, supplierPaymentEntry } from '@app/core';
+import { accountBalance, allocateCustomerPayments, collectionEntry, computeFees, convertAmount, creditPurchaseEntry, expandEntry, feesTotal, inventoryState, lineTotal, matchEntityByName, matchOutstandingByAmount, orderRevenueEntry, orderTotal, outstandingCharges, planInventoryIssue, purchaseTotal, removalIsTail, reversalEntry, supplierPaymentEntry } from '@app/core';
 import type { AccountType, ConvertCtx, Customer, CustomerPayment, FeeDefinition, FeeLine, FeeResult, IssuePlanLine, Order, OrderLine, OrderPaymentStatus, OrderStatus, PurchaseLine, Supplier } from '@app/core';
 import type { Repository, StoredAccount, StoredBook, StoredCustomer, StoredInventoryMovement, StoredOrder, StoredProduct, StoredPurchase, StoredSettlement, StoredTransaction } from '@app/store';
 import { genId } from './db';
@@ -459,7 +459,10 @@ export async function removeOrder(repo: Repository, book: StoredBook, orderId: s
   });
 }
 
-/** 记一笔收款：钱从应收/客户(订单币种)转入同币种收款资产账户，并落 Settlement 记录。 */
+/**
+ * 记一笔收款：钱从应收/客户(订单币种)转入同币种收款资产账户，并落 Settlement 记录。
+ * `idGen`/`settlementId` 可注入（账单导入核销用）：让交易 id 确定性派生自草稿行，落库中断重跑可自愈、不重复落。
+ */
 export async function recordCollection(
   repo: Repository,
   book: StoredBook,
@@ -471,16 +474,21 @@ export async function recordCollection(
     date: string;
     assetAccountId: string;
     note: string;
+    /** 注入的 id 生成器（首调＝交易 id）；缺省随机。 */
+    idGen?: () => string;
+    /** 注入的 Settlement id；缺省随机。 */
+    settlementId?: string;
   },
 ): Promise<void> {
+  const gen = opts.idGen ?? genId;
   const arId = await ensureReceivableAccount(repo, book, opts.customer, opts.currency);
   const entry = collectionEntry(
     { bookId: book.id, date: opts.date, amount: opts.amount, currency: opts.currency, receivableAccountId: arId, assetAccountId: opts.assetAccountId, payee: opts.customer.name, note: opts.note },
-    genId,
+    gen,
   );
   await repo.addTransaction(entry);
   await repo.addSettlement({
-    id: genId(),
+    id: opts.settlementId ?? genId(),
     bookId: book.id,
     direction: 'in',
     counterpartyType: 'customer',
@@ -839,20 +847,24 @@ export async function recordCreditStockIn(
   await recordStockPurchase(repo, book, { productId: opts.productId, qty: opts.qty, unitCost: opts.unitCost, date: opts.date, payMode: 'credit', supplierId: opts.supplier.id, txnId: entry.id, note: opts.note });
 }
 
-/** 付供应商货款：钱从付款资产账户(CNY)转入 应付账款/供应商（冲减欠款），并落 Settlement(out/supplier) 记录。 */
+/**
+ * 付供应商货款：钱从付款资产账户(CNY)转入 应付账款/供应商（冲减欠款），并落 Settlement(out/supplier) 记录。
+ * `idGen`/`settlementId` 可注入（账单导入核销用）：交易 id 确定性派生、落库中断可自愈。orderId 恒 null（供应商级 FIFO 摊应付）。
+ */
 export async function recordSupplierPayment(
   repo: Repository,
   book: StoredBook,
-  opts: { supplier: Supplier; amount: number; date: string; assetAccountId: string; note: string },
+  opts: { supplier: Supplier; amount: number; date: string; assetAccountId: string; note: string; idGen?: () => string; settlementId?: string },
 ): Promise<void> {
+  const gen = opts.idGen ?? genId;
   const apId = await ensurePayableAccount(repo, book, opts.supplier, 'CNY');
   const entry = supplierPaymentEntry(
     { bookId: book.id, date: opts.date, amount: opts.amount, currency: 'CNY', payableAccountId: apId, assetAccountId: opts.assetAccountId, payee: opts.supplier.name, note: opts.note },
-    genId,
+    gen,
   );
   await repo.addTransaction(entry);
   await repo.addSettlement({
-    id: genId(),
+    id: opts.settlementId ?? genId(),
     bookId: book.id,
     direction: 'out',
     counterpartyType: 'supplier',
@@ -864,6 +876,174 @@ export async function recordSupplierPayment(
     note: opts.note,
     txnId: entry.id,
   });
+}
+
+// —— 出口① 核销（账单导入 增量3）：把一笔生意收/付款流水核销到已有客户/供应商与未结清应收/应付。 ——
+// 编排活在本层（带 Repository）；core 只给纯匹配函数（matchEntityByName/matchOutstandingByAmount）。
+// v1 口径（已锁）：对方名精确匹配 + 仅 CNY；AR 可按等额单核销、AP 恒供应商级 FIFO（方案 B）；先匹配后造＝有未结清才建议核销。
+
+/** 复核台确认后的核销目标（实体 + 可选单据 + 收/付款资产账户）。 */
+export interface SettleTarget {
+  counterpartyType: 'customer' | 'supplier';
+  entityId: string;
+  /** AR 精确等额命中的订单 id；AP 恒 null（供应商级 FIFO）。 */
+  orderId: string | null;
+  /** 收/付款资产账户＝导入批次的源账户。 */
+  assetAccountId: string;
+}
+
+/** 一条流水的核销建议（suggestImportSettlements 产出，驱动复核台预选 + 文案）。 */
+export interface SettleSuggestion extends SettleTarget {
+  /** 命中的生意账本。 */
+  bookId: string;
+  direction: 'in' | 'out';
+  entityName: string;
+  /** 该实体未结清合计（CNY 最小单位）。 */
+  outstandingTotal: number;
+  /** 有精确等额单（AR：orderId 非空；AP：高确信预选标记）。 */
+  matchedExact: boolean;
+}
+
+/**
+ * 核销落库（对偶撤销 removeSettlement）：按方向载客户/供应商，建核销分录 + Settlement（原子）。
+ * `idGen` 注入＝交易 id 确定性派生（账单导入崩溃自愈）；`settlementId` 确定性＝整批撤销可定位、无孤儿。
+ * AR 走 recordCollection（可带 orderId）；AP 走 recordSupplierPayment（恒供应商级 FIFO）。币种恒 CNY（仅 CNY 才建议核销）。
+ */
+export async function settleStagingRow(
+  repo: Repository,
+  book: StoredBook,
+  opts: {
+    direction: 'in' | 'out';
+    target: SettleTarget;
+    amount: number;
+    date: string;
+    note: string;
+    idGen: () => string;
+    settlementId: string;
+  },
+): Promise<void> {
+  await repo.transaction(async () => {
+    if (opts.direction === 'in') {
+      const customer = await repo.getCustomer(opts.target.entityId);
+      if (!customer) throw new Error('核销目标客户不存在');
+      await recordCollection(repo, book, {
+        customer,
+        orderId: opts.target.orderId,
+        currency: 'CNY',
+        amount: opts.amount,
+        date: opts.date,
+        assetAccountId: opts.target.assetAccountId,
+        note: opts.note,
+        idGen: opts.idGen,
+        settlementId: opts.settlementId,
+      });
+    } else {
+      const supplier = await repo.getSupplier(opts.target.entityId);
+      if (!supplier) throw new Error('核销目标供应商不存在');
+      await recordSupplierPayment(repo, book, {
+        supplier,
+        amount: opts.amount,
+        date: opts.date,
+        assetAccountId: opts.target.assetAccountId,
+        note: opts.note,
+        idGen: opts.idGen,
+        settlementId: opts.settlementId,
+      });
+    }
+  });
+}
+
+/**
+ * 给一批待复核流水算核销建议：逐个生意账本试匹配（无客户/供应商的生活账本自然跳过＝出口路由只对生意账本）。
+ * 收款(in)→AR：对方名精确命中客户 + 该客户有 CNY 未结清单 → 建议核销，等额命中则预选该单（orderId）、否则整体 FIFO。
+ * 付款(out)→AP：对方名精确命中供应商 + 有未结清应付 → 建议核销（方案 B：orderId 恒 null，matchOutstandingByAmount 仅作高确信标记）。
+ * 护栏「先匹配后造」：仅当实体命中**且有未结清**才给建议；否则无建议（复核台默认裸收支）。仅 CNY（避免跨币种误配）。
+ */
+export async function suggestImportSettlements(
+  repo: Repository,
+  books: ReadonlyArray<StoredBook>,
+  rows: ReadonlyArray<{ id: string; direction: 'in' | 'out'; payee: string; amountMinor: number }>,
+  sourceAccountId: string,
+  today: string,
+): Promise<Map<string, SettleSuggestion>> {
+  const out = new Map<string, SettleSuggestion>();
+  const candidates = rows.filter((r) => r.payee.trim() !== '');
+  if (candidates.length === 0) return out;
+
+  for (const book of books) {
+    const remaining = candidates.filter((r) => !out.has(r.id));
+    if (remaining.length === 0) break;
+    const customers = await repo.listCustomers({ bookId: book.id });
+    const suppliers = await repo.listSuppliers({ bookId: book.id });
+    if (customers.length === 0 && suppliers.length === 0) continue; // 非生意账本（无客户/供应商）→ 跳过
+
+    // AR 未结清（按客户分组，仅 CNY 单）——仅当本批有收款行且本账本有客户时才算
+    let outstandingByCustomer: Map<string, Array<{ owed: number; date: string; orderId: string }>> | null = null;
+    if (customers.length > 0 && remaining.some((r) => r.direction === 'in')) {
+      const orders = await repo.listOrders({ bookId: book.id });
+      const settlements = await repo.listSettlements({ bookId: book.id });
+      const feeDefs = await repo.listFeeDefinitions({ bookId: book.id });
+      const { outstanding } = customerOrderStatus(orders, customers, settlements, today, feeDefs);
+      outstandingByCustomer = new Map();
+      for (const o of outstanding) {
+        if (o.order.currency !== 'CNY') continue; // 仅 CNY 核销
+        const arr = outstandingByCustomer.get(o.order.customerId) ?? [];
+        arr.push({ owed: o.owed, date: o.order.date, orderId: o.order.id });
+        outstandingByCustomer.set(o.order.customerId, arr);
+      }
+    }
+    // AP 未结清（按供应商台账 FIFO）——仅当本批有付款行且本账本有供应商时才算
+    let apAccounts: StoredAccount[] | null = null;
+    let apTxns: StoredTransaction[] | null = null;
+    if (suppliers.length > 0 && remaining.some((r) => r.direction === 'out')) {
+      apAccounts = await repo.listAccounts({ bookId: book.id });
+      apTxns = await repo.listTransactions({ bookId: book.id });
+    }
+
+    for (const r of remaining) {
+      if (r.direction === 'in' && outstandingByCustomer) {
+        const cid = matchEntityByName(r.payee, customers);
+        if (!cid) continue;
+        const items = outstandingByCustomer.get(cid) ?? [];
+        if (items.length === 0) continue; // 无未结清 → 不核销（先匹配后造）
+        const cust = customers.find((c) => c.id === cid)!;
+        const matched = matchOutstandingByAmount(r.amountMinor, items);
+        out.set(r.id, {
+          bookId: book.id,
+          direction: 'in',
+          counterpartyType: 'customer',
+          entityId: cid,
+          entityName: cust.name,
+          orderId: matched?.orderId ?? null,
+          assetAccountId: sourceAccountId,
+          outstandingTotal: items.reduce((s, i) => s + i.owed, 0),
+          matchedExact: matched != null,
+        });
+      } else if (r.direction === 'out' && apAccounts && apTxns) {
+        const sid = matchEntityByName(r.payee, suppliers);
+        if (!sid) continue;
+        const sup = suppliers.find((s) => s.id === sid)!;
+        // 仅 CNY 应付（与 AR 的 currency!=='CNY' 跳过对称）：排除该供应商外币应付子科目（`应付账款/<名> (币种)`），
+        // 否则 payableLedger 会把多币种欠额当同一最小单位混算、以错本位误判等额。现网 AP 恒 CNY，此为守住「仅 CNY 核销」不变量。
+        const cnyAp = apAccounts.filter((a) => !a.name.startsWith(`应付账款/${sup.name} (`));
+        const led = payableLedger(cnyAp, apTxns, sup.name);
+        const charges = outstandingCharges(led.charges, led.paid).map((c) => ({ owed: c.amount, date: c.date }));
+        if (charges.length === 0) continue;
+        out.set(r.id, {
+          bookId: book.id,
+          direction: 'out',
+          counterpartyType: 'supplier',
+          entityId: sid,
+          entityName: sup.name,
+          orderId: null, // 方案 B：供应商级 FIFO
+          assetAccountId: sourceAccountId,
+          outstandingTotal: charges.reduce((s, i) => s + i.owed, 0),
+          matchedExact: matchOutstandingByAmount(r.amountMinor, charges) != null,
+        });
+      }
+    }
+  }
+  return out;
 }
 
 // —— 为某订单采购（即采即出，成本直挂订单不过库存均价池）——
