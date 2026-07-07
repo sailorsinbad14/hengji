@@ -13,7 +13,8 @@
     "./ocr": "./src/ocr.ts",
     "./llm": "./src/llm.ts",
     "./asr": "./src/asr.ts",
-    "./dialog": "./src/dialog.ts"
+    "./dialog": "./src/dialog.ts",
+    "./export": "./src/export.ts"
   },
   "scripts": {
     "test": "vitest run",
