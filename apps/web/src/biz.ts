@@ -958,16 +958,18 @@ export async function settleStagingRow(
  * 收款(in)→AR：对方名精确命中客户 + 该客户有 CNY 未结清单 → 建议核销，等额命中则预选该单（orderId）、否则整体 FIFO。
  * 付款(out)→AP：对方名精确命中供应商 + 有未结清应付 → 建议核销（方案 B：orderId 恒 null，matchOutstandingByAmount 仅作高确信标记）。
  * 护栏「先匹配后造」：仅当实体命中**且有未结清**才给建议；否则无建议（复核台默认裸收支）。仅 CNY（避免跨币种误配）。
+ * 护栏「仅真实收支参与核销」：unknown 必须先人工定夺（否则解析器兜底方向会经核销出口不经定夺直接落账＝绕过红线）、
+ * transfer 是内部划转非对外资金流、refund 冲账方向与收付款语义相反——三者一律不给核销建议，走裸收支出口人工处理。
  */
 export async function suggestImportSettlements(
   repo: Repository,
   books: ReadonlyArray<StoredBook>,
-  rows: ReadonlyArray<{ id: string; direction: 'in' | 'out'; payee: string; amountMinor: number }>,
+  rows: ReadonlyArray<{ id: string; direction: 'in' | 'out'; payee: string; amountMinor: number; suggestion: string }>,
   sourceAccountId: string,
   today: string,
 ): Promise<Map<string, SettleSuggestion>> {
   const out = new Map<string, SettleSuggestion>();
-  const candidates = rows.filter((r) => r.payee.trim() !== '');
+  const candidates = rows.filter((r) => r.payee.trim() !== '' && (r.suggestion === 'income' || r.suggestion === 'expense'));
   if (candidates.length === 0) return out;
 
   for (const book of books) {

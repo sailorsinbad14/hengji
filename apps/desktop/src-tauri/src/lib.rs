@@ -1,5 +1,7 @@
+mod asr;
 mod crypto;
 mod db;
+mod llm;
 mod ocr;
 
 use std::sync::Mutex;
@@ -10,6 +12,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(db::Db(Mutex::new(None)))
         .manage(crypto::Crypto(Mutex::new(crypto::CryptoState::default())))
+        .manage(asr::Asr::default())
         .invoke_handler(tauri::generate_handler![
             db::db_open,
             db::db_select,
@@ -24,6 +27,14 @@ pub fn run() {
             crypto::lock,
             crypto::export_backup,
             crypto::wipe_data,
+            llm::llm_key_status,
+            llm::llm_set_key,
+            llm::llm_clear_key,
+            llm::llm_complete,
+            asr::asr_model_status,
+            asr::asr_download_model,
+            asr::asr_download_progress,
+            asr::asr_transcribe,
             ocr::ocr_image,
         ])
         .run(tauri::generate_context!())

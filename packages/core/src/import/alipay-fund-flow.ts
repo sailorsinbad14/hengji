@@ -1,5 +1,5 @@
 import { toMinor } from '../money';
-import { normalizeDateString, parseAmountCell } from './shared';
+import { normalizeDateString, parseAmountCell, splitCsvLine, stripBom } from './shared';
 import type { DraftSuggestion, Direction, ImportDraftRow, ImportMeta, ImportParseResult } from './types';
 
 /**
@@ -71,36 +71,6 @@ export function suggestFromType(accountingType: string, direction: Direction): D
     default: // 'ambiguous' 或未映射
       return 'unknown';
   }
-}
-
-/** 引号感知的 CSV 行切分（RFC4180：支持 "…" 包裹、""转义、字段内逗号）。 */
-function splitCsvLine(line: string): string[] {
-  const out: string[] = [];
-  let cur = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line.charAt(i);
-    if (inQuotes) {
-      if (ch === '"') {
-        if (line.charAt(i + 1) === '"') {
-          cur += '"';
-          i++;
-        } else inQuotes = false;
-      } else cur += ch;
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === ',') {
-      out.push(cur);
-      cur = '';
-    } else cur += ch;
-  }
-  out.push(cur);
-  return out;
-}
-
-/** 剥除行/文档首的 UTF-8 BOM（U+FEFF）；解码/重存环节易混入，会让首行 `#`/表头失配。 */
-function stripBom(s: string): string {
-  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
 }
 
 /** 在表头里按「列名前缀」定位列下标（对列顺序/新增列鲁棒）。找不到返回 -1。 */

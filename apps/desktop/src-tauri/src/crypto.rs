@@ -438,6 +438,10 @@ mod engine {
         for f in [ENVELOPE, ENVELOPE_NEW, MIGRATE_MARKER, SECURITY_FILE] {
             let _ = std::fs::remove_file(dir.join(f));
         }
+        // 增量4·4b：DPAPI 密钥文件（heng.apikey）随清空一并删。删失败容忍：密文绑本机本用户，
+        // 残留不可解且下次保存 Key 会覆盖；不因它拦整个清空（库才是数据泄漏面）。
+        let _ = crate::llm::clear_key(dir);
+
         let db = dir.join(DB_FILE);
         // 删库带退避重试 + 校验真消失（同 rename_with_retry 的理由）：Windows 下刚 `*conn=None` 的库文件句柄
         // 可能延迟释放，裸 remove_file 会静默失败（或返回 Ok 但「删除挂起」文件仍在）→ 明文「清空」假成功、
@@ -1196,9 +1200,10 @@ mod engine {
             std::fs::write(dir.join(DB_FILE), b"cipher").unwrap();
             std::fs::write(dir.join("heng.db-wal"), b"wal").unwrap();
             write_security(&dir, &SecurityFile { last_backup_path: Some("x".into()), ..Default::default() }).unwrap();
+            std::fs::write(dir.join(crate::llm::KEY_FILE), b"apikey-cipher").unwrap(); // 增量4·4b DPAPI 密钥文件
             std::fs::create_dir_all(dir.join("heng.destroyed-old")).unwrap(); // 历史隔离残留
             wipe(&dir).unwrap();
-            for f in [ENVELOPE, DB_FILE, "heng.db-wal", SECURITY_FILE] {
+            for f in [ENVELOPE, DB_FILE, "heng.db-wal", SECURITY_FILE, crate::llm::KEY_FILE] {
                 assert!(!dir.join(f).exists(), "{f} 应已删");
             }
             assert!(!dir.join("heng.destroyed-old").exists(), "历史隔离残留应清掉");

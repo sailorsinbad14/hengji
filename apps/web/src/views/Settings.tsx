@@ -5,6 +5,7 @@ import { currencyDef } from '../format';
 import type { CurrencyDef } from '../format';
 import { isDesktop } from '../db';
 import SecurityCard from '../components/SecurityCard';
+import AiCard from '../components/AiCard';
 import {
   ADVANCED_KEY,
   APP_SCOPE,
@@ -135,6 +136,8 @@ export default function Settings({
       {isDesktop && (
         <SecurityCard repo={repo} settings={settings} reload={reload} onSecurityChange={onSecurityChange} onWiped={onWiped} />
       )}
+
+      {isDesktop && <AiCard repo={repo} settings={settings} reload={reload} />}
 
       <div className="card">
         <label className="chkline">

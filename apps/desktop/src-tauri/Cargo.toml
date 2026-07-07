@@ -21,6 +21,13 @@ serde_json = "1"
 # 阶段 2 加密：NCrypt PCP 封装 DEK（Spike #2 已验）。仅 Windows 桌面用。
 sha2 = "0.10"
 zeroize = "1"
+# 增量4·4b 云 LLM(BYOK)：Rust 侧 HTTP 调用（key 不跨 IPC）。与 tauri 传递依赖同锁 0.13.4，仅 feature 合并。
+# TLS 走 native-tls＝Windows SChannel（本应用仅 Windows）：不引 rustls 的 aws-lc-rs/ring（要 nasm/cmake，
+# 本机没装），也不碰 rusqlite 的 vendored-openssl。blocking 在独立线程跑（见 llm.rs 杜绝 runtime 嵌套）。
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json", "blocking"] }
+# 增量4·4d 本地语音转写：官方 sherpa-onnx crate（k2-fsa）。static 默认＝构建时自动下载预编译库
+# （不需要 cmake/nasm，Spike 4d-0 已验）；SenseVoice int8 模型 ≈228MB 运行时按需下载（见 asr.rs）。
+sherpa-onnx = "1.13.3"
 
 [target.'cfg(windows)'.dependencies]
 # Win32_*：阶段 2 加密（NCrypt PCP）。Foundation/Globalization/Graphics_Imaging/Media_Ocr/Storage_Streams：增量2 本地 OCR（Windows.Media.Ocr）。

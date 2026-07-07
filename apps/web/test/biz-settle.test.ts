@@ -133,7 +133,7 @@ describe('suggestImportSettlements（增量3 核销建议）', () => {
     await repo.addCustomer(cust);
     const orderId = await completedServiceOrder(repo, book, cust, 100000);
 
-    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'in', payee: '张三', amountMinor: 100000 }], pay, DATE);
+    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'in', payee: '张三', amountMinor: 100000, suggestion: 'income' }], pay, DATE);
     const s = sug.get('r1')!;
     expect(s.counterpartyType).toBe('customer');
     expect(s.entityId).toBe(cust.id);
@@ -150,7 +150,7 @@ describe('suggestImportSettlements（增量3 核销建议）', () => {
     await repo.addCustomer(cust);
     await completedServiceOrder(repo, book, cust, 100000);
 
-    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'in', payee: '张三', amountMinor: 50000 }], pay, DATE);
+    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'in', payee: '张三', amountMinor: 50000, suggestion: 'income' }], pay, DATE);
     const s = sug.get('r1')!;
     expect(s.orderId).toBeNull(); // 无等额单 → 整体 FIFO
     expect(s.matchedExact).toBe(false);
@@ -165,7 +165,7 @@ describe('suggestImportSettlements（增量3 核销建议）', () => {
     const orderId = await completedServiceOrder(repo, book, cust, 100000);
     await recordCollection(repo, book, { customer: cust, orderId, currency: 'CNY', amount: 100000, date: '2026-06-11', assetAccountId: pay, note: '' });
 
-    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'in', payee: '张三', amountMinor: 100000 }], pay, DATE);
+    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'in', payee: '张三', amountMinor: 100000, suggestion: 'income' }], pay, DATE);
     expect(sug.has('r1')).toBe(false);
   });
 
@@ -176,14 +176,14 @@ describe('suggestImportSettlements（增量3 核销建议）', () => {
     await repo.addCustomer(cust);
     await completedServiceOrder(repo, book, cust, 100000);
 
-    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'in', payee: '王五', amountMinor: 100000 }], pay, DATE);
+    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'in', payee: '王五', amountMinor: 100000, suggestion: 'income' }], pay, DATE);
     expect(sug.has('r1')).toBe(false);
   });
 
   it('生活账本（无客户/供应商）→ 无建议', async () => {
     const repo = new InMemoryRepository();
     const { book, pay } = await bizBook(repo); // 不加任何客户/供应商
-    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'in', payee: '张三', amountMinor: 100000 }], pay, DATE);
+    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'in', payee: '张三', amountMinor: 100000, suggestion: 'income' }], pay, DATE);
     expect(sug.has('r1')).toBe(false);
   });
 
@@ -194,7 +194,7 @@ describe('suggestImportSettlements（增量3 核销建议）', () => {
     await repo.addCustomer(cust);
     await completedServiceOrder(repo, book, cust, 100000, 'USD');
 
-    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'in', payee: '张三', amountMinor: 100000 }], pay, DATE);
+    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'in', payee: '张三', amountMinor: 100000, suggestion: 'income' }], pay, DATE);
     expect(sug.has('r1')).toBe(false);
   });
 
@@ -205,12 +205,36 @@ describe('suggestImportSettlements（增量3 核销建议）', () => {
     await repo.addSupplier(sup);
     await creditPurchase(repo, book, sup, 'A货', 10, 8000); // 应付 80000
 
-    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'out', payee: '甲供应商', amountMinor: 80000 }], pay, DATE);
+    const sug = await suggestImportSettlements(repo, [book], [{ id: 'r1', direction: 'out', payee: '甲供应商', amountMinor: 80000, suggestion: 'expense' }], pay, DATE);
     const s = sug.get('r1')!;
     expect(s.counterpartyType).toBe('supplier');
     expect(s.entityId).toBe(sup.id);
     expect(s.orderId).toBeNull();
     expect(s.matchedExact).toBe(true);
     expect(s.outstandingTotal).toBe(80000);
+  });
+
+  it('unknown/transfer/refund 行 → 不给核销建议（红线：unknown 必须先人工定夺，不得经核销出口绕过）', async () => {
+    const repo = new InMemoryRepository();
+    const { book, pay } = await bizBook(repo);
+    const cust = mkCustomer(book.id, '张三');
+    await repo.addCustomer(cust);
+    await completedServiceOrder(repo, book, cust, 100000);
+    const sup = mkSupplier(book.id, '甲供应商');
+    await repo.addSupplier(sup);
+    await creditPurchase(repo, book, sup, 'A货', 10, 8000);
+
+    const sug = await suggestImportSettlements(
+      repo,
+      [book],
+      [
+        { id: 'u1', direction: 'in', payee: '张三', amountMinor: 100000, suggestion: 'unknown' },
+        { id: 't1', direction: 'out', payee: '甲供应商', amountMinor: 80000, suggestion: 'transfer-out' },
+        { id: 'f1', direction: 'out', payee: '甲供应商', amountMinor: 80000, suggestion: 'refund' },
+      ],
+      pay,
+      DATE,
+    );
+    expect(sug.size).toBe(0);
   });
 });

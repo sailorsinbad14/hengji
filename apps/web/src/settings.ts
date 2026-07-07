@@ -101,6 +101,44 @@ export function multiCurrencyOn(settings: StoredSetting[]): boolean {
   return settings.find((s) => s.scope === APP_SCOPE && s.key === MULTICURRENCY_KEY)?.value === 'on';
 }
 
+// —— AI 智能认列（app 级，仅桌面）——默认关（隐私 opt-in）。
+// 这里只存**非密**配置（协议/地址/模型/开关）；API Key 本体 DPAPI 加密存 Rust 侧（heng.apikey），绝不进 settings 表。
+export const AI_CONFIG_KEY = 'aiConfig';
+
+export interface AiConfig {
+  /** 总开关：关＝导入/语音的任何上云路径都不可用（默认）。 */
+  enabled: boolean;
+  /** 'anthropic' | 'openai'（OpenAI 兼容协议覆盖 DeepSeek/Kimi/智谱 等）。 */
+  protocol: 'anthropic' | 'openai';
+  baseUrl: string;
+  model: string;
+}
+
+export const DEFAULT_AI_CONFIG: AiConfig = { enabled: false, protocol: 'openai', baseUrl: '', model: '' };
+
+/** 防御性解析 AI 配置 JSON（坏 JSON/坏字段回落默认＝关）。settings 数组版与 repo 直读版共用。 */
+export function parseAiConfig(value: string | undefined): AiConfig {
+  if (!value) return DEFAULT_AI_CONFIG;
+  try {
+    const o = JSON.parse(value) as Record<string, unknown>;
+    return {
+      enabled: o.enabled === true,
+      protocol: o.protocol === 'anthropic' ? 'anthropic' : 'openai',
+      baseUrl: typeof o.baseUrl === 'string' ? o.baseUrl.trim() : '',
+      model: typeof o.model === 'string' ? o.model.trim() : '',
+    };
+  } catch {
+    return DEFAULT_AI_CONFIG;
+  }
+}
+
+export function aiConfigOf(settings: StoredSetting[]): AiConfig {
+  return parseAiConfig(settings.find((s) => s.scope === APP_SCOPE && s.key === AI_CONFIG_KEY)?.value);
+}
+
+/** AI 认列的映射 spec 记忆（app 级 JSON 数组，最新在前、容量 8）：同一银行再导先本地重放、零上云。 */
+export const LLM_SPECS_KEY = 'llmCsvSpecs';
+
 // —— 多币种币种注册表（app 级，全局共用，用户自管）——
 /** 自定义币种存 app 级 JSON 数组（不含 CNY）：[{code,symbol,name,decimals,rate}, …]。 */
 export const CURRENCIES_KEY = 'currencies';

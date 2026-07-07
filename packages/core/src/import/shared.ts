@@ -60,3 +60,33 @@ export function parseAmountCell(cell: unknown): number {
   if (!/^-?\d+(\.\d+)?$/.test(t)) return NaN;
   return Math.abs(parseFloat(t));
 }
+
+/** 引号感知的 CSV 行切分（RFC4180：支持 "…" 包裹、""转义、字段内含分隔符）。分隔符默认逗号。 */
+export function splitCsvLine(line: string, delimiter = ','): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line.charAt(i);
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line.charAt(i + 1) === '"') {
+          cur += '"';
+          i++;
+        } else inQuotes = false;
+      } else cur += ch;
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delimiter) {
+      out.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/** 剥除行/文档首的 UTF-8 BOM（U+FEFF）；解码/重存环节易混入，会让首行 `#`/表头失配。 */
+export function stripBom(s: string): string {
+  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
+}
