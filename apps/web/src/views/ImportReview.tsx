@@ -25,6 +25,7 @@ import { llmComplete, llmKeyStatus, isLlmError } from '@app/store/llm';
 import { asrDownloadModel, asrDownloadProgress, asrModelStatus, asrTranscribe } from '@app/store/asr';
 import type { AsrDownloadInfo } from '@app/store/asr';
 import { isDesktop } from '../db';
+import { confirmAsk } from '../confirm';
 
 /** 批次来源标签：账单文件源走 SOURCE_LABELS；OCR / AI 认列 / 语音另立（不进 SOURCE_LABELS，避免混入对账的进料下拉）。 */
 const srcLabel = (s: string): string =>
@@ -253,7 +254,7 @@ export default function ImportReview({
       setMsg('尚未配置 API Key：请到「设置 → AI 智能认列」保存你的 Key。');
       return;
     }
-    if (!window.confirm(`将把下面这段转写文本发送给你配置的 AI 服务商（${cfg.baseUrl}）生成记账草稿。\n音频本身不会上传。是否继续？`)) {
+    if (!(await confirmAsk(`将把下面这段转写文本发送给你配置的 AI 服务商（${cfg.baseUrl}）生成记账草稿。\n音频本身不会上传。是否继续？`))) {
       setMsg('已取消，未发送任何数据。');
       return;
     }
@@ -334,7 +335,7 @@ export default function ImportReview({
         return;
       }
       // 外发内容如实枚举：文件名也在 payload 里（银行导出文件名常含姓名/卡号，必须明示）
-      const ok = window.confirm(
+      const ok = await confirmAsk(
         `将把「${file.name}」的文件名、表头与最多前 25 行样本（每行截 400 字符）发送给你配置的 AI 服务商（${cfg.baseUrl}）用于识别列结构。\n金额解析、去重与记账仍全部在本地完成。是否继续？`,
       );
       if (!ok) {
@@ -646,7 +647,7 @@ export default function ImportReview({
   }
 
   async function onRevert(b: StoredStagingBatch): Promise<void> {
-    if (!confirm(`撤销「${b.label}」整批？会删除它已入账的交易（余额回退），草稿作废。要重做请重新导入。`)) return;
+    if (!(await confirmAsk(`撤销「${b.label}」整批？会删除它已入账的交易（余额回退），草稿作废。要重做请重新导入。`))) return;
     setBusy(true);
     await revertImportBatch(repo, b.id, todayISO());
     if (active?.id === b.id) {

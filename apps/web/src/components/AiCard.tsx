@@ -3,6 +3,7 @@ import type { Repository, StoredSetting } from '@app/store';
 import { isLlmError, llmClearKey, llmComplete, llmKeyStatus, llmSetKey } from '@app/store/llm';
 import { AI_CONFIG_KEY, APP_SCOPE, aiConfigOf } from '../settings';
 import type { AiConfig } from '../settings';
+import { confirmAsk } from '../confirm';
 
 /**
  * 设置页「AI 智能认列」卡（增量4·4c，仅桌面渲染——Settings 里 isDesktop 门控）。
@@ -114,7 +115,7 @@ export default function AiCard({
   }
 
   async function clearKey(): Promise<void> {
-    if (!window.confirm('清除已保存的 API Key？')) return;
+    if (!(await confirmAsk('清除已保存的 API Key？'))) return;
     setBusy(true);
     try {
       await llmClearKey();
