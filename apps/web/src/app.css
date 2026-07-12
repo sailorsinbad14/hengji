@@ -83,6 +83,8 @@ input:focus, select:focus { outline: 2px solid var(--brand-50); border-color: va
 .main { padding: 26px 30px; max-width: 1080px; width: 100%; }
 .main-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .main-head h2 { font-size: 20px; font-weight: 800; }
+.main-head .head-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.main-head .head-actions .btn { white-space: nowrap; }
 
 .stats { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
 .stat { border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; background: #fff; }

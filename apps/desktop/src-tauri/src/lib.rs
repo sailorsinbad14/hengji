@@ -1,6 +1,7 @@
 mod asr;
 mod crypto;
 mod db;
+mod export;
 mod llm;
 mod ocr;
 
@@ -28,6 +29,7 @@ pub fn run() {
             crypto::lock,
             crypto::export_backup,
             crypto::wipe_data,
+            export::save_text_file,
             llm::llm_key_status,
             llm::llm_set_key,
             llm::llm_clear_key,

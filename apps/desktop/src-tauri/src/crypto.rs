@@ -36,6 +36,13 @@ pub(crate) fn dek_hex(dek: &[u8; 32]) -> Zeroizing<String> {
     Zeroizing::new(dek.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// 供流水导出（export.rs）复用的 heng.* 防撞校验（错误折为 String）：
+/// 任何经原生「另存为」落盘的文件都不许写进应用数据目录的 heng.*（防手滑覆盖活动库/信封）。
+pub(crate) fn validate_export_dest(dir: &Path, dest: &Path) -> Result<(), String> {
+    // 文案去掉「备份」语境（导出流水时看到「备份」二字会错位）。
+    engine::validate_backup_dest(dir, dest).map_err(|e| e.message.replace("把备份导出", "导出"))
+}
+
 /// 已解锁会话状态（仅 Rust 侧，绝不跨 IPC 回传 JS）。
 #[derive(Default)]
 pub struct CryptoState {
@@ -331,7 +338,7 @@ mod engine {
 
     /// 拒绝把备份导到应用数据目录里的 `heng.*`（活动库/信封/控制文件），防覆盖自毁。
     /// dest 可能尚不存在 → canonicalize 其父目录后比对。
-    fn validate_backup_dest(dir: &Path, dest: &Path) -> Result<(), CryptoError> {
+    pub(super) fn validate_backup_dest(dir: &Path, dest: &Path) -> Result<(), CryptoError> {
         let parent = dest.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(dir);
         let canon_parent = parent
             .canonicalize()
@@ -343,7 +350,8 @@ mod engine {
             .map_err(|e| internal(format!("应用数据目录不可访问: {e}")))?;
         if canon_parent == canon_dir {
             if let Some(name) = dest.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with("heng.") {
+                // Windows 文件系统大小写不敏感：比对前小写化，堵 HENG.DB / Heng.db 绕过写穿活动库。
+                if name.to_ascii_lowercase().starts_with("heng.") {
                     return Err(internal("不能把备份导出到应用数据目录的 heng.* 文件（会覆盖活动数据）".into()));
                 }
             }
