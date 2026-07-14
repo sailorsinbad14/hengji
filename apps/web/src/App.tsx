@@ -14,6 +14,7 @@ import Dashboard from './views/Dashboard';
 import Transactions from './views/Transactions';
 import Budgets from './views/Budgets';
 import Recurring from './views/Recurring';
+import Calendar from './views/Calendar';
 import Invest from './views/Invest';
 import Accounts from './views/Accounts';
 import Customers from './views/Customers';
@@ -27,7 +28,7 @@ import Reconcile from './views/Reconcile';
 import ImportReview from './views/ImportReview';
 import Settings from './views/Settings';
 
-type View = 'dashboard' | 'txns' | 'budgets' | 'recurring' | 'invest' | 'accounts' | 'reconcile' | 'customers' | 'suppliers' | 'orders' | 'products' | 'inventory' | 'purchases' | 'fees' | 'documents';
+type View = 'dashboard' | 'txns' | 'budgets' | 'recurring' | 'calendar' | 'invest' | 'accounts' | 'reconcile' | 'customers' | 'suppliers' | 'orders' | 'products' | 'inventory' | 'purchases' | 'fees' | 'documents';
 /** 顶层导航：财务总表 / 全局设置 / 某账本 id。 */
 const OVERVIEW = 'all';
 const SETTINGS = '__settings__';
@@ -62,6 +63,7 @@ const TABS: Record<BookType, Array<[View, string]>> = {
     ['txns', '流水'],
     ['budgets', '预算'],
     ['recurring', '周期记账'],
+    ['calendar', '日历'],
     ['accounts', '账户'],
   ],
   business: [
@@ -76,12 +78,14 @@ const TABS: Record<BookType, Array<[View, string]>> = {
     ['txns', '流水'],
     ['budgets', '预算'],
     ['recurring', '周期记账'],
+    ['calendar', '日历'],
     ['accounts', '账户'],
   ],
   investment: [
     ['invest', '投资'],
     ['txns', '流水'],
     ['recurring', '周期记账'],
+    ['calendar', '日历'],
     ['accounts', '账户'],
   ],
 };
@@ -534,6 +538,7 @@ export default function App() {
             {view === 'txns' && <Transactions data={data} />}
             {view === 'budgets' && <Budgets data={data} />}
             {view === 'recurring' && <Recurring data={data} />}
+            {view === 'calendar' && <Calendar data={data} />}
             {view === 'invest' && <Invest data={data} />}
             {view === 'accounts' && <Accounts data={data} />}
             {view === 'customers' && <Customers data={data} />}

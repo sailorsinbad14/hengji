@@ -171,6 +171,25 @@ input:focus, select:focus { outline: 2px solid var(--brand-50); border-color: va
 .rr-actions { display: flex; align-items: center; gap: 8px; }
 .rr-actions input { width: 100px; }
 
+/* 日历 */
+.cal-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-bottom: 6px; }
+.cal-wd { text-align: center; font-size: 11px; color: var(--muted); font-weight: 700; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-cell {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  min-height: 72px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 9px;
+  background: #fff; text-align: left;
+}
+.cal-cell:hover { border-color: var(--brand); }
+.cal-cell.blank { border-color: transparent; background: transparent; pointer-events: none; }
+.cal-cell.today { border-color: var(--brand); background: var(--brand-50); }
+.cal-cell.selected { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.cal-daynum { font-size: 12px; font-weight: 700; color: var(--ink-soft); }
+.cal-net { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cal-count { font-size: 10px; }
+/* 到期徽标复用 --biz/--biz-50（琥珀色），与 .chip 的"生意"标签同色但语义不同 */
+.cal-due { font-size: 10px; font-weight: 700; color: var(--biz); background: var(--biz-50); border-radius: 999px; padding: 1px 6px; align-self: flex-end; margin-top: auto; }
+
 /* 账本切换器 */
 .book {
   display: flex; align-items: center; gap: 8px;
@@ -360,6 +379,7 @@ input:focus, select:focus { outline: 2px solid var(--brand-50); border-color: va
   .side { position: static; height: auto; }
   .stats { grid-template-columns: 1fr 1fr; }
   .mid { grid-template-columns: 1fr; }
+  .cal-cell { min-height: 56px; padding: 4px 6px; }
 }
 
 /* —— 解锁屏（桌面已加密，bootstrap 门）—— */

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { expandEntry, accountBalance, netWorth, incomeExpense, balancesByCurrency, convertAmount } from '../src/index';
+import { expandEntry, accountBalance, netWorth, incomeExpense, balancesByCurrency, convertAmount, dailyTotals } from '../src/index';
 import type { Account, ConvertCtx, Transaction } from '../src/index';
 
 const B = 'b1';
@@ -178,6 +178,57 @@ describe('reports', () => {
     it('netWorth 不传 convert：原样相加（向后兼容，单币种正确）', () => {
       const cnyOnly = mcTxns().filter((t) => t.id === 'o1');
       expect(netWorth(cnyOnly, mc)).toBe(500000);
+    });
+  });
+
+  describe('dailyTotals', () => {
+    it('按日聚合：转账不影响收支但计入笔数', () => {
+      const m = dailyTotals(txns, accounts, '2026-05');
+      expect(m.size).toBe(4);
+      expect(m.get('2026-05-01')).toEqual({ income: 500000, expense: 0, net: 500000, count: 1 });
+      expect(m.get('2026-05-03')).toEqual({ income: 0, expense: 3000, net: -3000, count: 1 });
+      expect(m.get('2026-05-05')).toEqual({ income: 0, expense: 0, net: 0, count: 1 }); // bank→alipay 转账
+      expect(m.get('2026-05-10')).toEqual({ income: 0, expense: 0, net: 0, count: 1 }); // bank→invest 转账
+    });
+
+    it('按日聚合：另一月份独立计算', () => {
+      const m = dailyTotals(txns, accounts, '2026-06');
+      expect(m.size).toBe(2);
+      expect(m.get('2026-06-02')).toEqual({ income: 200000, expense: 0, net: 200000, count: 1 });
+      expect(m.get('2026-06-03')).toEqual({ income: 0, expense: 80000, net: -80000, count: 1 });
+    });
+
+    it('空月/无交易返回空 Map', () => {
+      expect(dailyTotals(txns, accounts, '2026-07').size).toBe(0);
+      expect(dailyTotals([], accounts, '2026-05').size).toBe(0);
+    });
+
+    it('月份精确匹配：非规范前缀（2026-1 / 2026）不会错配其他月', () => {
+      let n = 0;
+      const gen = (): string => `dt${++n}`;
+      const t2 = [
+        expandEntry({ kind: 'expense', bookId: B, date: '2026-10-05', amount: 10000, accountId: 'bank', categoryId: 'food' }, gen),
+        expandEntry({ kind: 'expense', bookId: B, date: '2026-01-05', amount: 20000, accountId: 'bank', categoryId: 'food' }, gen),
+      ];
+      expect(dailyTotals(t2, accounts, '2026-1').size).toBe(0);
+      expect(dailyTotals(t2, accounts, '2026').size).toBe(0);
+      expect(dailyTotals(t2, accounts, '2026-01').get('2026-01-05')?.expense).toBe(20000);
+      expect(dailyTotals(t2, accounts, '2026-10').get('2026-10-05')?.expense).toBe(10000);
+    });
+
+    it('同日多笔累加，不覆盖', () => {
+      let n = 0;
+      const gen = (): string => `sd${++n}`;
+      const sameDay = [
+        expandEntry({ kind: 'income', bookId: B, date: '2026-06-15', amount: 100000, accountId: 'bank', categoryId: 'salary' }, gen),
+        expandEntry({ kind: 'expense', bookId: B, date: '2026-06-15', amount: 30000, accountId: 'bank', categoryId: 'food' }, gen),
+      ];
+      expect(dailyTotals(sameDay, accounts, '2026-06').get('2026-06-15')).toEqual({
+        income: 100000,
+        expense: 30000,
+        net: 70000,
+        count: 2,
+      });
     });
   });
 });

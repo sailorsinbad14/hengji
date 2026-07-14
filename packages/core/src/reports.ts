@@ -143,3 +143,47 @@ export function incomeExpense(
   const expense = expenseSum;
   return { income, expense, net: income - expense };
 }
+
+export interface DailyTotal {
+  /** 已翻正：当日收入 */
+  income: number;
+  expense: number;
+  /** net = income - expense */
+  net: number;
+  /** 当日交易笔数（含转账等不影响 income/expense 的交易——日历格子要能反映"这天发生过操作"） */
+  count: number;
+}
+
+/**
+ * 按日聚合的收支统计（日历视图用）。month 形如 'YYYY-MM'（精确 7 字符，同 budgetUsage 教训：
+ * 用 slice(0,7) 精确匹配而非 startsWith 前缀匹配，避免 '2026-1' 错配 2026-10/11/12）。
+ * 空月/无交易月返回空 Map（稀疏，只含实际发生交易的日期）。
+ */
+export function dailyTotals(
+  txns: Transaction[],
+  accounts: Account[],
+  month: string,
+  convert?: ConvertCtx,
+): Map<string, DailyTotal> {
+  const typeOf = new Map(accounts.map((a) => [a.id, a.type] as const));
+  const conv = (p: { amount: number; currency: string }): number =>
+    convert ? convertAmount(p.amount, p.currency, convert) : p.amount;
+  const out = new Map<string, DailyTotal>();
+  for (const t of txns) {
+    if (t.date.slice(0, 7) !== month) continue;
+    let incomeSum = 0;
+    let expenseSum = 0;
+    for (const p of t.postings) {
+      const ty = typeOf.get(p.accountId);
+      if (ty === 'income') incomeSum += conv(p);
+      else if (ty === 'expense') expenseSum += conv(p);
+    }
+    const cur = out.get(t.date) ?? { income: 0, expense: 0, net: 0, count: 0 };
+    cur.income += -incomeSum;
+    cur.expense += expenseSum;
+    cur.net = cur.income - cur.expense;
+    cur.count += 1;
+    out.set(t.date, cur);
+  }
+  return out;
+}
