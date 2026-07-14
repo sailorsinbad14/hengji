@@ -14,9 +14,9 @@
 
 ## ⬇️ 下载
 
-**[下载最新版（Windows）](https://github.com/sailorsinbad14/hengji/releases/latest)** — 双击 `Hengji_0.5.0_x64-setup.exe` 安装即用，无需任何开发环境，**数据 100% 存本机、不联网**。
+**[下载最新版（Windows）](https://github.com/sailorsinbad14/hengji/releases/latest)** — 双击 `Hengji_0.5.1_x64-setup.exe` 安装即用，无需任何开发环境，**数据 100% 存本机、不联网**。
 
-> 当前 v0.5.0，仅 Windows x64、未数字签名。首次运行若 SmartScreen 提示「未知发布者」，点「**更多信息 → 仍要运行**」即可。想体验或参与开发，见 [开发者手册](docs/development.md)。
+> 当前 v0.5.1，仅 Windows x64、未数字签名。首次运行若 SmartScreen 提示「未知发布者」，点「**更多信息 → 仍要运行**」即可。想体验或参与开发，见 [开发者手册](docs/development.md)。
 
 ## 🚀 3 分钟上手
 

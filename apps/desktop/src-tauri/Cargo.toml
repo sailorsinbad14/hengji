@@ -1,6 +1,6 @@
 [package]
 name = "hengji-desktop"
-version = "0.5.0"
+version = "0.5.1"
 description = "Hengji - local-first double-entry accounting"
 edition = "2021"
 
